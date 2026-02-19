@@ -1,0 +1,941 @@
+-- =========================================
+-- ACACIA COUNTRY SCHOOL – COMPLETE SYSTEM SETUP
+-- (final version with full table cleanup and fixed views)
+-- =========================================
+
+-- =========================================
+-- 1. DROP ALL DEPENDENT FUNCTIONS WITH CASCADE
+--    (removes any policies that depend on them)
+-- =========================================
+DROP FUNCTION IF EXISTS public.has_role(UUID, app_role) CASCADE;
+DROP FUNCTION IF EXISTS public.has_any_role(UUID) CASCADE;
+DROP FUNCTION IF EXISTS public.get_user_role(UUID) CASCADE;
+DROP FUNCTION IF EXISTS public.has_permission(UUID, TEXT, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS public.get_user_permissions(UUID) CASCADE;
+DROP FUNCTION IF EXISTS public.log_resource_access(UUID, TEXT, TEXT, UUID, BOOLEAN, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS public.log_payment_access() CASCADE;
+DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;   -- also drops trigger
+
+-- =========================================
+-- 2. DROP ALL TABLES (to ensure clean slate)
+-- =========================================
+DROP TABLE IF EXISTS public.resource_access_log CASCADE;
+DROP TABLE IF EXISTS public.user_permissions CASCADE;
+DROP TABLE IF EXISTS public.role_permissions CASCADE;
+DROP TABLE IF EXISTS public.permissions CASCADE;
+DROP TABLE IF EXISTS public.payments CASCADE;
+DROP TABLE IF EXISTS public.fees CASCADE;
+DROP TABLE IF EXISTS public.pupils CASCADE;
+DROP TABLE IF EXISTS public.parents CASCADE;
+DROP TABLE IF EXISTS public.grades CASCADE;
+DROP TABLE IF EXISTS public.audit_logs CASCADE;
+DROP TABLE IF EXISTS public.school_settings CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+DROP TABLE IF EXISTS public.user_roles CASCADE;
+DROP TABLE IF EXISTS public.currencies CASCADE;
+DROP TABLE IF EXISTS public.term_lock CASCADE;
+
+-- =========================================
+-- 3. ENUM TYPE (if not exists)
+-- =========================================
+DO $$ BEGIN
+    CREATE TYPE public.app_role AS ENUM ('Director', 'SuperAdmin', 'SchoolAdmin');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- =========================================
+-- 4. TABLES (fresh creation)
+-- =========================================
+
+-- 4.1 CURRENCIES
+CREATE TABLE public.currencies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code TEXT UNIQUE NOT NULL,
+    name TEXT,
+    symbol TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.currencies ENABLE ROW LEVEL SECURITY;
+
+-- 4.2 USER ROLES
+CREATE TABLE public.user_roles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    role app_role NOT NULL,
+    UNIQUE (user_id, role)
+);
+ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
+
+-- 4.3 PROFILES
+CREATE TABLE public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    full_name TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+-- 4.4 SCHOOL SETTINGS
+CREATE TABLE public.school_settings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    school_name TEXT NOT NULL DEFAULT 'Acacia Country School',
+    color_primary TEXT NOT NULL DEFAULT '#28A745',
+    color_secondary TEXT NOT NULL DEFAULT '#FFA500',
+    logo_url TEXT,
+    allow_partial_payments BOOLEAN NOT NULL DEFAULT true,
+    max_installments INTEGER NOT NULL DEFAULT 3,
+    currency_symbol TEXT NOT NULL DEFAULT 'K',
+    academic_year_start_month INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.school_settings ENABLE ROW LEVEL SECURITY;
+
+-- 4.5 AUDIT LOGS
+CREATE TABLE public.audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    action_type TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    record_id UUID,
+    performed_by UUID REFERENCES auth.users(id),
+    old_data JSONB,
+    new_data JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+
+-- 4.6 GRADES
+CREATE TABLE public.grades (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.grades ENABLE ROW LEVEL SECURITY;
+
+-- 4.7 PARENTS
+CREATE TABLE public.parents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    full_name TEXT NOT NULL,
+    phone_number TEXT,
+    account_number TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.parents ENABLE ROW LEVEL SECURITY;
+
+-- 4.8 PUPILS – includes all required columns
+CREATE TABLE public.pupils (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    full_name TEXT NOT NULL,
+    sex CHAR(1) CHECK (sex IN ('M','F')),
+    grade_id UUID REFERENCES public.grades(id),
+    parent_id UUID REFERENCES public.parents(id),
+    status TEXT NOT NULL DEFAULT 'active',
+    currency_id UUID REFERENCES public.currencies(id),
+    tuition_fee NUMERIC(12,2) DEFAULT 0,
+    other_fee NUMERIC(12,2) DEFAULT 0,
+    amount_paid NUMERIC(12,2) DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Adjust status constraint to accept 'O' and 'N' as well
+ALTER TABLE public.pupils ADD CONSTRAINT pupils_status_check CHECK (status IN ('active', 'inactive', 'O', 'N'));
+
+ALTER TABLE public.pupils ENABLE ROW LEVEL SECURITY;
+
+-- 4.9 FEES
+CREATE TABLE public.fees (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    grade_id UUID NOT NULL REFERENCES public.grades(id) ON DELETE CASCADE,
+    term_number INTEGER NOT NULL CHECK (term_number IN (1,2,3)),
+    year INTEGER NOT NULL,
+    amount NUMERIC(12,2) NOT NULL,
+    created_by UUID REFERENCES auth.users(id),
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (grade_id, term_number, year)
+);
+ALTER TABLE public.fees ENABLE ROW LEVEL SECURITY;
+
+-- 4.10 PAYMENTS (with approval workflow)
+CREATE TABLE public.payments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pupil_id UUID NOT NULL REFERENCES public.pupils(id) ON DELETE CASCADE,
+    term_number INTEGER NOT NULL CHECK (term_number IN (1,2,3)),
+    year INTEGER NOT NULL,
+    amount_paid NUMERIC(12,2) NOT NULL CHECK (amount_paid > 0),
+    payment_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    recorded_by UUID REFERENCES auth.users(id),
+    is_deleted BOOLEAN NOT NULL DEFAULT false,
+    deleted_by UUID REFERENCES auth.users(id),
+    deleted_at TIMESTAMPTZ,
+    deletion_reason TEXT,
+    approval_status TEXT NOT NULL DEFAULT 'approved' CHECK (approval_status IN ('approved','pending_approval','rejected')),
+    approved_by UUID REFERENCES auth.users(id),
+    approved_at TIMESTAMPTZ,
+    rejection_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+
+-- 4.11 TERM LOCK
+CREATE TABLE public.term_lock (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    term_number INTEGER NOT NULL CHECK (term_number IN (1,2,3)),
+    year INTEGER NOT NULL,
+    is_locked BOOLEAN NOT NULL DEFAULT false,
+    locked_by UUID REFERENCES auth.users(id),
+    locked_at TIMESTAMPTZ,
+    lock_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (term_number, year)
+);
+ALTER TABLE public.term_lock ENABLE ROW LEVEL SECURITY;
+
+-- 4.12 PERMISSIONS (RBAC)
+CREATE TABLE public.permissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    resource TEXT NOT NULL,
+    action TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.permissions ENABLE ROW LEVEL SECURITY;
+
+-- 4.13 ROLE_PERMISSIONS (links roles to permissions)
+CREATE TABLE public.role_permissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role app_role NOT NULL,
+    permission_id UUID NOT NULL REFERENCES public.permissions(id) ON DELETE CASCADE,
+    granted_by UUID REFERENCES auth.users(id),
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (role, permission_id)
+);
+ALTER TABLE public.role_permissions ENABLE ROW LEVEL SECURITY;
+
+-- 4.14 USER_PERMISSIONS (individual overrides)
+CREATE TABLE public.user_permissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    permission_id UUID NOT NULL REFERENCES public.permissions(id) ON DELETE CASCADE,
+    granted BOOLEAN NOT NULL DEFAULT true,
+    granted_by UUID REFERENCES auth.users(id),
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ,
+    UNIQUE (user_id, permission_id)
+);
+ALTER TABLE public.user_permissions ENABLE ROW LEVEL SECURITY;
+
+-- 4.15 RESOURCE_ACCESS_LOG
+CREATE TABLE public.resource_access_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id),
+    resource TEXT NOT NULL,
+    action TEXT NOT NULL,
+    resource_id UUID,
+    ip_address INET,
+    user_agent TEXT,
+    success BOOLEAN NOT NULL,
+    denial_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE public.resource_access_log ENABLE ROW LEVEL SECURITY;
+
+-- =========================================
+-- 5. INDEXES
+-- =========================================
+CREATE INDEX idx_permissions_resource_action ON public.permissions(resource, action);
+CREATE INDEX idx_role_permissions_role ON public.role_permissions(role);
+CREATE INDEX idx_user_permissions_user ON public.user_permissions(user_id);
+CREATE INDEX idx_resource_access_log_user ON public.resource_access_log(user_id);
+CREATE INDEX idx_resource_access_log_created ON public.resource_access_log(created_at);
+
+-- =========================================
+-- 6. FUNCTIONS
+-- =========================================
+
+-- Role helper functions
+CREATE OR REPLACE FUNCTION public.has_role(_user_id UUID, _role app_role)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$ SELECT EXISTS (SELECT 1 FROM public.user_roles WHERE user_id = _user_id AND role = _role) $$;
+
+CREATE OR REPLACE FUNCTION public.has_any_role(_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$ SELECT EXISTS (SELECT 1 FROM public.user_roles WHERE user_id = _user_id) $$;
+
+CREATE OR REPLACE FUNCTION public.get_user_role(_user_id UUID)
+RETURNS app_role
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$ SELECT role FROM public.user_roles WHERE user_id = _user_id LIMIT 1 $$;
+
+-- Profile trigger function
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.profiles (id, full_name)
+    VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email));
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- Comprehensive permission check function
+CREATE OR REPLACE FUNCTION public.has_permission(
+    _user_id UUID,
+    _resource TEXT,
+    _action TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    has_role_permission BOOLEAN;
+    has_user_permission BOOLEAN;
+    is_denied BOOLEAN;
+BEGIN
+    -- Role-based permissions
+    SELECT EXISTS (
+        SELECT 1 
+        FROM public.role_permissions rp
+        JOIN public.permissions p ON rp.permission_id = p.id
+        JOIN public.user_roles ur ON ur.role = rp.role
+        WHERE ur.user_id = _user_id
+        AND p.resource = _resource
+        AND p.action = _action
+    ) INTO has_role_permission;
+    
+    -- User-specific granted permissions
+    SELECT EXISTS (
+        SELECT 1 
+        FROM public.user_permissions up
+        JOIN public.permissions p ON up.permission_id = p.id
+        WHERE up.user_id = _user_id
+        AND p.resource = _resource
+        AND p.action = _action
+        AND up.granted = true
+        AND (up.expires_at IS NULL OR up.expires_at > now())
+    ) INTO has_user_permission;
+    
+    -- Explicit denial
+    SELECT EXISTS (
+        SELECT 1 
+        FROM public.user_permissions up
+        JOIN public.permissions p ON up.permission_id = p.id
+        WHERE up.user_id = _user_id
+        AND p.resource = _resource
+        AND p.action = _action
+        AND up.granted = false
+        AND (up.expires_at IS NULL OR up.expires_at > now())
+    ) INTO is_denied;
+    
+    RETURN (has_role_permission OR has_user_permission) AND NOT is_denied;
+END;
+$$;
+
+-- Get all permissions for a user
+CREATE OR REPLACE FUNCTION public.get_user_permissions(_user_id UUID)
+RETURNS TABLE (
+    permission_name TEXT,
+    resource TEXT,
+    action TEXT,
+    source TEXT,
+    granted_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+-- Role permissions
+SELECT 
+    p.name,
+    p.resource,
+    p.action,
+    'role'::TEXT,
+    rp.granted_at,
+    NULL::TIMESTAMPTZ
+FROM public.role_permissions rp
+JOIN public.permissions p ON rp.permission_id = p.id
+JOIN public.user_roles ur ON ur.role = rp.role
+WHERE ur.user_id = _user_id
+UNION ALL
+-- User permissions
+SELECT 
+    p.name,
+    p.resource,
+    p.action,
+    CASE WHEN up.granted THEN 'user_granted' ELSE 'user_denied' END,
+    up.granted_at,
+    up.expires_at
+FROM public.user_permissions up
+JOIN public.permissions p ON up.permission_id = p.id
+WHERE up.user_id = _user_id
+AND (up.expires_at IS NULL OR up.expires_at > now())
+ORDER BY resource, action;
+$$;
+
+-- Log resource access
+CREATE OR REPLACE FUNCTION public.log_resource_access(
+    _user_id UUID,
+    _resource TEXT,
+    _action TEXT,
+    _resource_id UUID DEFAULT NULL,
+    _success BOOLEAN DEFAULT true,
+    _denial_reason TEXT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    INSERT INTO public.resource_access_log (
+        user_id, resource, action, resource_id, ip_address, user_agent, success, denial_reason
+    )
+    VALUES (
+        _user_id,
+        _resource,
+        _action,
+        _resource_id,
+        inet_client_addr(),
+        current_setting('request.headers', true)::json->>'user-agent',
+        _success,
+        _denial_reason
+    );
+END;
+$$;
+
+-- Payment access logging trigger function
+CREATE OR REPLACE FUNCTION public.log_payment_access()
+RETURNS TRIGGER AS $$
+DECLARE
+    has_perm BOOLEAN;
+    action_text TEXT;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        action_text := 'create';
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.is_deleted = true AND OLD.is_deleted = false THEN
+            action_text := 'soft_delete';
+        ELSIF NEW.approval_status = 'approved' AND OLD.approval_status = 'pending_approval' THEN
+            action_text := 'approve_delete';
+        ELSE
+            action_text := 'update';
+        END IF;
+    ELSIF TG_OP = 'DELETE' THEN
+        action_text := 'delete';
+    ELSE
+        RETURN NEW;
+    END IF;
+    
+    SELECT public.has_permission(auth.uid(), 'payments', action_text) INTO has_perm;
+    
+    PERFORM public.log_resource_access(
+        auth.uid(),
+        'payments',
+        action_text,
+        NEW.id,
+        has_perm,
+        CASE WHEN has_perm THEN NULL ELSE 'Insufficient permissions' END
+    );
+    
+    IF NOT has_perm THEN
+        RAISE EXCEPTION 'Access denied: insufficient permissions for % on payments', action_text;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- =========================================
+-- 7. TRIGGERS
+-- =========================================
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- Payments trigger disabled temporarily to avoid RLS permission loops during data setup
+-- CREATE TRIGGER payments_access_log
+-- BEFORE INSERT OR UPDATE OR DELETE ON public.payments
+-- FOR EACH ROW EXECUTE FUNCTION public.log_payment_access();
+
+-- =========================================
+-- 8. VIEWS
+-- =========================================
+
+-- Balance per pupil
+CREATE OR REPLACE VIEW public.balance_per_pupil AS
+SELECT 
+    p.id AS pupil_id,
+    p.full_name AS pupil_name,
+    g.name AS grade_name,
+    par.full_name AS parent_name,
+    COALESCE(f.amount,0) AS expected_amount,
+    COALESCE(SUM(pay.amount_paid) FILTER (WHERE pay.is_deleted=false AND pay.approval_status='approved'),0) AS collected_amount,
+    COALESCE(f.amount,0) - COALESCE(SUM(pay.amount_paid) FILTER (WHERE pay.is_deleted=false AND pay.approval_status='approved'),0) AS balance_amount,
+    CASE 
+        WHEN COALESCE(f.amount,0) - COALESCE(SUM(pay.amount_paid) FILTER (WHERE pay.is_deleted=false AND pay.approval_status='approved'),0) <= 0 THEN 'paid'
+        WHEN COALESCE(SUM(pay.amount_paid) FILTER (WHERE pay.is_deleted=false AND pay.approval_status='approved'),0) > 0 THEN 'partial'
+        ELSE 'unpaid'
+    END AS payment_status
+FROM public.pupils p
+LEFT JOIN public.grades g ON p.grade_id=g.id
+LEFT JOIN public.parents par ON p.parent_id=par.id
+LEFT JOIN public.fees f ON p.grade_id=f.grade_id AND f.is_active=true
+LEFT JOIN public.payments pay ON p.id=pay.pupil_id AND pay.term_number=f.term_number AND pay.year=f.year
+WHERE p.status IN ('active', 'O')
+GROUP BY p.id, p.full_name, g.name, par.full_name, f.amount;
+
+-- Grade summary
+CREATE OR REPLACE VIEW public.grade_summary AS
+SELECT 
+    g.id AS grade_id,
+    g.name AS grade_name,
+    COUNT(DISTINCT p.id) AS total_pupils,
+    COALESCE(SUM(f.amount),0) AS total_expected,
+    COALESCE(SUM(pay.amount_paid) FILTER (WHERE pay.is_deleted=false AND pay.approval_status='approved'),0) AS total_collected,
+    COALESCE(SUM(f.amount),0) - COALESCE(SUM(pay.amount_paid) FILTER (WHERE pay.is_deleted=false AND pay.approval_status='approved'),0) AS total_pending
+FROM public.grades g
+LEFT JOIN public.pupils p ON g.id=p.grade_id AND p.status IN ('active', 'O')
+LEFT JOIN public.fees f ON g.id=f.grade_id AND f.is_active=true
+LEFT JOIN public.payments pay ON p.id=pay.pupil_id AND pay.term_number=f.term_number AND pay.year=f.year
+GROUP BY g.id, g.name;
+
+-- Pending deletion approvals (fixed: join with profiles instead of auth.users)
+CREATE OR REPLACE VIEW public.pending_deletion_approvals AS
+SELECT 
+    pay.id AS payment_id,
+    pay.pupil_id,
+    pup.full_name AS pupil_name,
+    g.name AS grade_name,
+    pay.amount_paid,
+    pay.payment_date,
+    pay.deletion_reason,
+    pay.deleted_at,
+    rec.full_name AS recorded_by_name,
+    del.full_name AS deleted_by_name
+FROM public.payments pay
+JOIN public.pupils pup ON pay.pupil_id = pup.id
+JOIN public.grades g ON pup.grade_id = g.id
+LEFT JOIN public.profiles rec ON pay.recorded_by = rec.id
+LEFT JOIN public.profiles del ON pay.deleted_by = del.id
+WHERE pay.is_deleted = true AND pay.approval_status = 'pending_approval'
+ORDER BY pay.deleted_at DESC;
+
+-- Users with roles
+CREATE OR REPLACE VIEW public.users_with_roles AS
+SELECT 
+    u.id,
+    u.email,
+    p.full_name,
+    ur.role,
+    u.created_at,
+    u.last_sign_in_at
+FROM auth.users u
+LEFT JOIN public.profiles p ON u.id = p.id
+LEFT JOIN public.user_roles ur ON u.id = ur.user_id
+WHERE ur.role IS NOT NULL
+ORDER BY u.created_at DESC;
+
+-- Permission matrix
+CREATE OR REPLACE VIEW public.permission_matrix AS
+SELECT 
+    r.role::text AS role,
+    perm.name AS permission_name,
+    perm.resource,
+    perm.action,
+    rp.granted_at,
+    'role' AS source_type
+FROM public.role_permissions rp
+JOIN public.permissions perm ON rp.permission_id = perm.id
+CROSS JOIN (VALUES ('SuperAdmin'::app_role), ('Director'), ('SchoolAdmin')) AS r(role)
+WHERE r.role = rp.role
+UNION ALL
+SELECT 
+    u.email AS role,
+    perm.name AS permission_name,
+    perm.resource,
+    perm.action,
+    up.granted_at,
+    CASE WHEN up.granted THEN 'user_granted' ELSE 'user_denied' END AS source_type
+FROM public.user_permissions up
+JOIN public.permissions perm ON up.permission_id = perm.id
+JOIN auth.users u ON u.id = up.user_id
+ORDER BY role, resource, action;
+
+-- Recent access attempts
+CREATE OR REPLACE VIEW public.recent_access_attempts AS
+SELECT 
+    ral.created_at,
+    u.email,
+    ral.resource,
+    ral.action,
+    ral.success,
+    ral.denial_reason,
+    ral.ip_address,
+    ral.user_agent
+FROM public.resource_access_log ral
+JOIN auth.users u ON u.id = ral.user_id
+ORDER BY ral.created_at DESC
+LIMIT 100;
+
+-- Grant view access
+GRANT SELECT ON public.users_with_roles TO authenticated;
+GRANT SELECT ON public.permission_matrix TO authenticated;
+GRANT SELECT ON public.recent_access_attempts TO authenticated;
+
+-- =========================================
+-- 9. RLS POLICIES (using has_permission)
+-- =========================================
+
+-- Profiles
+CREATE POLICY "Users can read own profile" ON public.profiles
+    FOR SELECT USING (auth.uid() = id);
+
+-- Pupils
+CREATE POLICY "Users with pupils:read can view pupils" ON public.pupils
+    FOR SELECT TO authenticated
+    USING (public.has_permission(auth.uid(), 'pupils', 'read'));
+
+CREATE POLICY "Users with pupils:create can insert" ON public.pupils
+    FOR INSERT TO authenticated
+    WITH CHECK (public.has_permission(auth.uid(), 'pupils', 'create'));
+
+-- Payments
+CREATE POLICY "Payments read access" ON public.payments
+    FOR SELECT TO authenticated
+    USING (public.has_permission(auth.uid(), 'payments', 'read'));
+
+CREATE POLICY "Payments create access" ON public.payments
+    FOR INSERT TO authenticated
+    WITH CHECK (public.has_permission(auth.uid(), 'payments', 'create'));
+
+CREATE POLICY "Payments update access" ON public.payments
+    FOR UPDATE TO authenticated
+    USING (public.has_permission(auth.uid(), 'payments', 'update'));
+
+CREATE POLICY "Payments soft delete access" ON public.payments
+    FOR UPDATE TO authenticated
+    USING (
+        public.has_permission(auth.uid(), 'payments', 'soft_delete') AND
+        is_deleted = false
+    )
+    WITH CHECK (
+        public.has_permission(auth.uid(), 'payments', 'soft_delete') AND
+        is_deleted = true
+    );
+
+CREATE POLICY "Payments approve delete access" ON public.payments
+    FOR UPDATE TO authenticated
+    USING (
+        public.has_permission(auth.uid(), 'payments', 'approve_delete') AND
+        is_deleted = true AND
+        approval_status = 'pending_approval'
+    );
+
+-- (Add similar policies for other tables as needed)
+
+-- =========================================
+-- 10. BASE DATA INSERTION
+-- =========================================
+
+-- 10.1 Currencies
+INSERT INTO public.currencies (code, name, symbol) VALUES ('ZMW', 'Zambian Kwacha', 'K')
+ON CONFLICT (code) DO NOTHING;
+
+-- 10.2 Grades (including those needed for sample data)
+INSERT INTO public.grades (name) VALUES
+    ('Reception 2026'),
+    ('Grade 1 2026'),
+    ('Grade 2 2026'),
+    ('Grade 3 2026'),
+    ('Grade 4 2026'),
+    ('Grade 5 2026'),
+    ('Grade 6 2026'),
+    ('Grade 7 2026'),
+    ('Grade 1'), ('Grade 2'), ('Grade 3'), ('Grade 4'), ('Grade 5'), ('Grade 6'), ('Grade 7')
+ON CONFLICT (name) DO NOTHING;
+
+-- 10.3 School settings (default)
+INSERT INTO public.school_settings (school_name) VALUES ('Acacia Country School')
+ON CONFLICT DO NOTHING;
+
+-- 10.4 Permissions
+INSERT INTO public.permissions (name, description, resource, action) VALUES
+    -- Users
+    ('users.create', 'Create new users', 'users', 'create'),
+    ('users.read', 'View user information', 'users', 'read'),
+    ('users.update', 'Update user information', 'users', 'update'),
+    ('users.delete', 'Delete users', 'users', 'delete'),
+    ('users.activate', 'Activate/deactivate users', 'users', 'activate'),
+    ('users.assign_role', 'Assign roles to users', 'users', 'assign_role'),
+    ('users.reset_password', 'Reset user passwords', 'users', 'reset_password'),
+    -- Pupils
+    ('pupils.create', 'Create new pupils', 'pupils', 'create'),
+    ('pupils.read', 'View pupil information', 'pupils', 'read'),
+    ('pupils.update', 'Update pupil information', 'pupils', 'update'),
+    ('pupils.delete', 'Delete pupils', 'pupils', 'delete'),
+    -- Parents
+    ('parents.create', 'Create new parents', 'parents', 'create'),
+    ('parents.read', 'View parent information', 'parents', 'read'),
+    ('parents.update', 'Update parent information', 'parents', 'update'),
+    ('parents.delete', 'Delete parents', 'parents', 'delete'),
+    -- Payments
+    ('payments.create', 'Record payments', 'payments', 'create'),
+    ('payments.read', 'View payment information', 'payments', 'read'),
+    ('payments.update', 'Update payment information', 'payments', 'update'),
+    ('payments.delete', 'Delete payments', 'payments', 'delete'),
+    ('payments.soft_delete', 'Soft delete payments', 'payments', 'soft_delete'),
+    ('payments.approve_delete', 'Approve payment deletions', 'payments', 'approve_delete'),
+    ('payments.adjust', 'Adjust payment amounts', 'payments', 'adjust'),
+    ('payments.refund', 'Process refunds', 'payments', 'refund'),
+    -- Fees
+    ('fees.create', 'Create fee structures', 'fees', 'create'),
+    ('fees.read', 'View fee information', 'fees', 'read'),
+    ('fees.update', 'Update fee structures', 'fees', 'update'),
+    ('fees.delete', 'Delete fee structures', 'fees', 'delete'),
+    ('fees.activate', 'Activate/deactivate fees', 'fees', 'activate'),
+    -- Audit & reports
+    ('audit.read', 'View audit logs', 'audit_logs', 'read'),
+    ('audit.export', 'Export audit data', 'audit_logs', 'export'),
+    ('reports.read', 'View reports', 'reports', 'read'),
+    ('reports.create', 'Generate reports', 'reports', 'create'),
+    ('reports.export', 'Export reports', 'reports', 'export'),
+    -- System
+    ('system.settings', 'Manage system settings', 'system', 'settings'),
+    ('system.backup', 'Create system backups', 'system', 'backup'),
+    ('system.restore', 'Restore from backup', 'system', 'restore'),
+    ('system.maintenance', 'Perform system maintenance', 'system', 'maintenance'),
+    ('term.lock', 'Lock terms', 'term', 'lock'),
+    ('term.unlock', 'Unlock terms', 'term', 'unlock'),
+    ('term.override', 'Override term locks', 'term', 'override'),
+    -- Grades
+    ('grades.create', 'Create grades', 'grades', 'create'),
+    ('grades.read', 'View grade information', 'grades', 'read'),
+    ('grades.update', 'Update grade information', 'grades', 'update'),
+    ('grades.delete', 'Delete grades', 'grades', 'delete')
+ON CONFLICT (name) DO NOTHING;
+
+-- 10.5 Role permissions
+-- SuperAdmin gets all permissions
+INSERT INTO public.role_permissions (role, permission_id)
+SELECT 'SuperAdmin'::app_role, id FROM public.permissions
+ON CONFLICT DO NOTHING;
+
+-- Director (all except system.backup, system.restore, system.maintenance, users.delete, term.override)
+INSERT INTO public.role_permissions (role, permission_id)
+SELECT 'Director'::app_role, id FROM public.permissions
+WHERE name NOT IN ('system.backup', 'system.restore', 'system.maintenance', 'users.delete', 'term.override')
+ON CONFLICT DO NOTHING;
+
+-- SchoolAdmin (basic operational)
+INSERT INTO public.role_permissions (role, permission_id)
+SELECT 'SchoolAdmin'::app_role, id FROM public.permissions
+WHERE name IN (
+    'pupils.create', 'pupils.read', 'pupils.update',
+    'parents.create', 'parents.read', 'parents.update',
+    'payments.create', 'payments.read', 'payments.soft_delete',
+    'fees.read',
+    'grades.read',
+    'reports.read'
+)
+ON CONFLICT DO NOTHING;
+
+-- 10.6 Assign SuperAdmin role to existing user (if email matches)
+DO $$
+DECLARE
+    user_uuid UUID;
+BEGIN
+    SELECT id INTO user_uuid FROM auth.users WHERE email = 'acaciaprojects86@gmail.com';
+    IF user_uuid IS NOT NULL THEN
+        INSERT INTO public.user_roles (user_id, role) VALUES (user_uuid, 'SuperAdmin'::app_role)
+        ON CONFLICT (user_id, role) DO NOTHING;
+    END IF;
+END $$;
+
+-- =========================================
+-- 11. SAMPLE PUPIL DATA (with corrected columns)
+-- =========================================
+
+-- Reception 2026
+INSERT INTO pupils (full_name, sex, status, grade_id, currency_id, tuition_fee, other_fee, amount_paid)
+SELECT * FROM (VALUES
+    ('RABECCA MIYOBA','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('NANDIPA BANDA','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('FELISTUS NDENDE','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1500),
+    ('TINASHE NYANGA','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1900),
+    ('LILATO SIKAPA','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('ATTALIA PHIRI','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('IZUKANJI CHULU','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('LUYANDO HABANJI','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('CINDY CHANDA','F','N',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('MAYAMIKO MUSHANGA','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('MERCY SAKALA','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1700),
+    ('RENISIA CHIMBWALUME','F','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2160,0,2160),
+    ('JOSHUA MUMBA','M','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1400),
+    ('WEZI KALIMAZONDO','M','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('BARNABAS MUSHAYABANU','M','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1650),
+    ('FUMBANI MPHANDE','M','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1950),
+    ('BENJAMIN KABWIKU','M','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2160,0,2160),
+    ('KUZIPA MPANDE','M','O',(SELECT id FROM grades WHERE name='Reception 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400)
+) AS t
+WHERE NOT EXISTS (SELECT 1 FROM pupils WHERE full_name = t.column1 AND grade_id = (SELECT id FROM grades WHERE name='Reception 2026'));
+
+-- Grade 1 2026
+INSERT INTO pupils (full_name, sex, status, grade_id, currency_id, tuition_fee, other_fee, amount_paid)
+SELECT * FROM (VALUES
+    ('ERNEST LIFWATILA','M','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('GIFT NIMBABAZI','M','N',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('WALTON SEMANI','M','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('FAVOUR CHISUPA','M','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('TATENDA MANOEYA','M','N',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('RYLEE MWENDA','M','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('CRAIGE BUUMBA','M','N',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('CHIPEGO SIKALINDA','M','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2160),
+    ('CHISUNGUSHO MWILA','M','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('NAVIL LIFUMBELA','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('LIMPO NOTULU','F','N',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('THELMA KALOMBO','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('SHAWNA NAMFUKWE','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1850),
+    ('JASMINE LUMWAYO','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('MAUREEN MWENYA','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('FAVOUR CHISPASHA','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('ZEPPORAH KAMBOLE','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('PRINCESS NGAMBI','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1600),
+    ('LUSE BWALYA','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('SHEKINAH KABAMBA','F','O',(SELECT id FROM grades WHERE name='Grade 1 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200)
+) AS t
+WHERE NOT EXISTS (SELECT 1 FROM pupils WHERE full_name = t.column1 AND grade_id = (SELECT id FROM grades WHERE name='Grade 1 2026'));
+
+-- Grade 2 2026
+INSERT INTO pupils (full_name, sex, status, grade_id, currency_id, tuition_fee, other_fee, amount_paid)
+SELECT * FROM (VALUES
+    ('CHANDA TINOTENDA','F','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('CHEMBE LUCKY','F','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('CHEWE KALENGA','F','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('SARAH PHIRI','F','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('CHABOTA SIKALINDA','F','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('ZULU ESTHER','F','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('TEMBO JEDAIDAH','F','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('MARTHA CHIKOTI','F','N',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('FULARA MWAKAPIKI','F','N',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('GIFT NIMBABAZI','M','N',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('KAMPAMBA JOSHUA','M','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('MWANSA EMMANUEL','M','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('DANIEL SAKALA','M','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1700),
+    ('KUZWAYO DAKA','M','O',(SELECT id FROM grades WHERE name='Grade 2 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400)
+) AS t
+WHERE NOT EXISTS (SELECT 1 FROM pupils WHERE full_name = t.column1 AND grade_id = (SELECT id FROM grades WHERE name='Grade 2 2026'));
+
+-- Grade 3 2026
+INSERT INTO pupils (full_name, sex, status, grade_id, currency_id, tuition_fee, other_fee, amount_paid)
+SELECT * FROM (VALUES
+    ('SALIFYANJI NACHILIMA','F','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('NOTULU LISELI','F','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('LUYANDO MUDENDA','F','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1220),
+    ('NATASHA BAMBALA','F','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1500),
+    ('MIYOBA CHRISTINE','F','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('ELIDA CHANDA','F','N',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('WINNIE SIALUMBA','F','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('NIBABAZI MILKA','F','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('JEMIMAH MULUMBI','F','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('NANCY BUUMBA','F','N',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('OLIVIA MPANDE','F','N',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('GIFT MWANZA','M','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('ETHAN ZULU','M','N',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('LAWRENCE BANDA','M','N',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('PATRICK SAKALA','M','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('ALAM SIALUMBA','M','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('SHYANE SINIFUKWE','M','O',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2160,0,1850),
+    ('EMMANUEL HACHABA','M','N',(SELECT id FROM grades WHERE name='Grade 3 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200)
+) AS t
+WHERE NOT EXISTS (SELECT 1 FROM pupils WHERE full_name = t.column1 AND grade_id = (SELECT id FROM grades WHERE name='Grade 3 2026'));
+
+-- Grade 4 2026
+INSERT INTO pupils (full_name, sex, status, grade_id, currency_id, tuition_fee, other_fee, amount_paid)
+SELECT * FROM (VALUES
+    ('KUNDEZHI KABWIKU','F','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('PATIACE KAWEWE','F','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('HANAHMARIA KUDONGO','F','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('GRACE TEMBO','F','N',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('TAILA ZOMBI','M','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('WANDIPAH MANDEXA','M','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('NGENDA TAPELO','M','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('DAVID PONDO','M','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('ISHMAEL MAREBESA','M','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('ATUPELE MWASAGA','M','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('ETHAN CHEMBE','M','O',(SELECT id FROM grades WHERE name='Grade 4 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200)
+) AS t
+WHERE NOT EXISTS (SELECT 1 FROM pupils WHERE full_name = t.column1 AND grade_id = (SELECT id FROM grades WHERE name='Grade 4 2026'));
+
+-- Grade 5 2026
+INSERT INTO pupils (full_name, sex, status, grade_id, currency_id, tuition_fee, other_fee, amount_paid)
+SELECT * FROM (VALUES
+    ('CHELSEA SHULTZ','F','O',(SELECT id FROM grades WHERE name='Grade 5 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('GRACE JERE','F','O',(SELECT id FROM grades WHERE name='Grade 5 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('GINNAH MWASAGA','F','O',(SELECT id FROM grades WHERE name='Grade 5 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('PHOEBBIE KAOMA','F','N',(SELECT id FROM grades WHERE name='Grade 5 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('ISAAC MWANZA','M','O',(SELECT id FROM grades WHERE name='Grade 5 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('NAVID LIFUMBELA','M','O',(SELECT id FROM grades WHERE name='Grade 5 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200),
+    ('LUIS DAKA','M','O',(SELECT id FROM grades WHERE name='Grade 5 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,0),
+    ('AIDEN CHIRWA','M','O',(SELECT id FROM grades WHERE name='Grade 5 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400)
+) AS t
+WHERE NOT EXISTS (SELECT 1 FROM pupils WHERE full_name = t.column1 AND grade_id = (SELECT id FROM grades WHERE name='Grade 5 2026'));
+
+-- Grade 6 2026
+INSERT INTO pupils (full_name, sex, status, grade_id, currency_id, tuition_fee, other_fee, amount_paid)
+SELECT * FROM (VALUES
+    ('Pupil G6-1','M','N',(SELECT id FROM grades WHERE name='Grade 6 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('Pupil G6-2','F','O',(SELECT id FROM grades WHERE name='Grade 6 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2000)
+) AS t
+WHERE NOT EXISTS (SELECT 1 FROM pupils WHERE full_name = t.column1 AND grade_id = (SELECT id FROM grades WHERE name='Grade 6 2026'));
+
+-- Grade 7 2026
+INSERT INTO pupils (full_name, sex, status, grade_id, currency_id, tuition_fee, other_fee, amount_paid)
+SELECT * FROM (VALUES
+    ('Pupil G7-1','F','N',(SELECT id FROM grades WHERE name='Grade 7 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,2400),
+    ('Pupil G7-2','M','O',(SELECT id FROM grades WHERE name='Grade 7 2026'),(SELECT id FROM currencies WHERE code='ZMW'),2400,0,1200)
+) AS t
+WHERE NOT EXISTS (SELECT 1 FROM pupils WHERE full_name = t.column1 AND grade_id = (SELECT id FROM grades WHERE name='Grade 7 2026'));
+
+-- =========================================
+-- 12. SAMPLE FEES (Term 1 2026 for all grades)
+-- =========================================
+INSERT INTO public.fees (grade_id, term_number, year, amount, created_by, is_active)
+SELECT 
+    g.id,
+    1,
+    2026,
+    2400,
+    (SELECT id FROM auth.users WHERE email = 'acaciaprojects86@gmail.com' LIMIT 1),
+    true
+FROM public.grades g
+WHERE g.name LIKE '%2026'
+ON CONFLICT (grade_id, term_number, year) DO NOTHING;
+
+-- =========================================
+-- 13. SAMPLE PAYMENTS (based on pupils' amount_paid values)
+-- =========================================
+INSERT INTO public.payments (pupil_id, term_number, year, amount_paid, payment_date, recorded_by, is_deleted, approval_status)
+SELECT 
+    p.id,
+    1,
+    2026,
+    p.amount_paid,
+    CURRENT_DATE - (FLOOR(RANDOM() * 60)::INTEGER || ' days')::INTERVAL,
+    (SELECT id FROM auth.users WHERE email = 'acaciaprojects86@gmail.com' LIMIT 1),
+    false,
+    'approved'
+FROM public.pupils p
+JOIN public.grades g ON p.grade_id = g.id
+WHERE g.name LIKE '%2026' AND p.amount_paid > 0
+ON CONFLICT DO NOTHING;
+
+-- =========================================
+-- SCRIPT COMPLETE
+-- =========================================
