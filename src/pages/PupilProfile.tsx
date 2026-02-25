@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, DollarSign, Edit } from "lucide-react";
+import { ArrowLeft, DollarSign, Edit, CheckCircle, Plus, BookOpen, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { getPupil, updatePupil } from "@/services/pupils";
-import { getSchoolFees, createSchoolFee, getOtherFees, createOtherFee, updateOtherFee, getInstallments, recordSchoolFeePayment, recordOtherFeePayment } from "@/services/fees";
+import { getSchoolFees, createSchoolFee, getOtherFees, createOtherFee, getInstallments, recordSchoolFeePayment, recordOtherFeePayment } from "@/services/fees";
 import { getTerms } from "@/services/terms";
 import { getGrades } from "@/services/grades";
 import type { Pupil, SchoolFee, OtherFee, Installment, Term, Grade } from "@/types";
@@ -20,6 +20,7 @@ export default function PupilProfile() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
+
   const [pupil, setPupil] = useState<Pupil | null>(null);
   const [schoolFees, setSchoolFees] = useState<SchoolFee[]>([]);
   const [otherFees, setOtherFees] = useState<OtherFee[]>([]);
@@ -45,6 +46,7 @@ export default function PupilProfile() {
   const [payFee, setPayFee] = useState<SchoolFee | OtherFee | null>(null);
   const [payAmount, setPayAmount] = useState("");
   const [payRCT, setPayRCT] = useState("");
+  const [paymentType, setPaymentType] = useState<"full" | "partial">("full");
 
   // Create fee dialog
   const [feeOpen, setFeeOpen] = useState(false);
@@ -61,14 +63,13 @@ export default function PupilProfile() {
       const [p, sf, of, inst, t, g] = await Promise.all([
         getPupil(id), getSchoolFees(id), getOtherFees(id), getInstallments(id), getTerms(), getGrades()
       ]);
-      setPupil(p); 
-      setSchoolFees(sf); 
-      setOtherFees(of); 
-      setInstallments(inst); 
+      setPupil(p);
+      setSchoolFees(sf);
+      setOtherFees(of);
+      setInstallments(inst);
       setTerms(t);
       setGrades(g);
-      
-      // Initialize edit form with current pupil data
+
       if (p) {
         setEditForm({
           full_name: p.full_name,
@@ -101,12 +102,28 @@ export default function PupilProfile() {
     }
   };
 
-  const handleMarkPaid = async (fee: OtherFee) => {
-    if (!id) return;
+  const handlePayment = async () => {
+    if (!id || !payFee) return;
+
+    const amount = paymentType === "full" ? Number(payFee.balance) : Number(payAmount);
+    if (!amount || amount <= 0 || amount > Number(payFee.balance)) {
+      toast({ title: "Error", description: "Invalid payment amount", variant: "destructive" });
+      return;
+    }
+
     try {
-      await recordOtherFeePayment(id, fee.id, fee.balance);
+      if ('total_expected' in payFee) {
+        await recordSchoolFeePayment(id, payFee.id, amount, payRCT);
+      } else {
+        await recordOtherFeePayment(id, payFee.id, amount);
+      }
+      setPayOpen(false);
+      setPayFee(null);
+      setPayAmount("");
+      setPayRCT("");
+      setPaymentType("full");
       load();
-      toast({ title: "Marked as paid" });
+      toast({ title: "Payment recorded successfully" });
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     }
@@ -114,65 +131,6 @@ export default function PupilProfile() {
 
   const totalBalance = schoolFees.reduce((s, f) => s + Number(f.balance), 0) + otherFees.reduce((s, f) => s + Number(f.balance), 0);
   const totalExpected = schoolFees.reduce((s, f) => s + Number(f.total_expected), 0) + otherFees.reduce((s, f) => s + Number(f.total_expected), 0);
-
-  const handleCreateFee = async () => {
-    if (!id) return;
-    try {
-      await createSchoolFee({
-        pupil_id: id,
-        term_id: feeForm.term_id,
-        total_expected: feeForm.total_expected,
-        collected: 0,
-      });
-      setFeeOpen(false);
-      setFeeForm({ term_id: "", total_expected: 2400 });
-      load();
-      toast({ title: "School fee created" });
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
-    }
-  };
-
-  const handlePayment = async () => {
-    if (!id || !payFee) return;
-    try {
-      if (payFee && 'total_expected' in payFee) {
-        // School fee
-        await recordSchoolFeePayment(id, payFee.id, +payAmount, payRCT);
-      } else if (payFee) {
-        // Other fee
-        await recordOtherFeePayment(id, payFee.id, +payAmount);
-      }
-      setPayOpen(false); setPayFee(null); setPayAmount(""); setPayRCT("");
-      load();
-      toast({ title: "Payment recorded" });
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
-    }
-  };
-
-  const handleOtherFee = async () => {
-    if (!id) return;
-    try {
-      await createOtherFee({ pupil_id: id, term_id: otherForm.term_id, fee_type: otherForm.fee_type, total_expected: otherForm.total_expected });
-      setOtherOpen(false); setOtherForm({ term_id: "", fee_type: "", total_expected: 0 });
-      load();
-      toast({ title: "Other fee added" });
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
-    }
-  };
-
-  const handleUnblock = async () => {
-    if (!id) return;
-    try {
-      await updatePupil(id, { status: 'admitted' });
-      load();
-      toast({ title: "Admission unblocked" });
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
-    }
-  };
 
   if (loading) return <div className="flex items-center justify-center h-64 text-muted-foreground">Loading...</div>;
   if (!pupil) return <div className="text-center py-12 text-muted-foreground">Pupil not found</div>;
@@ -194,64 +152,28 @@ export default function PupilProfile() {
           </Badge>
           <Dialog open={editOpen} onOpenChange={setEditOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline" size="sm">
-                <Edit className="h-4 w-4 mr-2" />
-                Edit Pupil
-              </Button>
+              <Button variant="outline" size="sm"><Edit className="h-4 w-4 mr-2" />Edit Pupil</Button>
             </DialogTrigger>
             <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Edit Pupil Information</DialogTitle>
-              </DialogHeader>
+              <DialogHeader><DialogTitle>Edit Pupil Information</DialogTitle></DialogHeader>
               <div className="space-y-3 pt-2">
-                <div>
-                  <Label>Full Name</Label>
-                  <Input 
-                    value={editForm.full_name} 
-                    onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} 
-                  />
-                </div>
+                <div><Label>Full Name</Label><Input value={editForm.full_name} onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} /></div>
                 <div>
                   <Label>Sex</Label>
                   <Select value={editForm.sex} onValueChange={(v) => setEditForm({ ...editForm, sex: v })}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select sex" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Male">Male</SelectItem>
-                      <SelectItem value="Female">Female</SelectItem>
-                    </SelectContent>
+                    <SelectTrigger><SelectValue placeholder="Select sex" /></SelectTrigger>
+                    <SelectContent><SelectItem value="Male">Male</SelectItem><SelectItem value="Female">Female</SelectItem></SelectContent>
                   </Select>
                 </div>
                 <div>
                   <Label>Grade</Label>
                   <Select value={editForm.grade_id} onValueChange={(v) => setEditForm({ ...editForm, grade_id: v })}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select grade" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {grades.map((g) => (
-                        <SelectItem key={g.id} value={g.id}>
-                          {g.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
+                    <SelectTrigger><SelectValue placeholder="Select grade" /></SelectTrigger>
+                    <SelectContent>{grades.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label>Parent Name</Label>
-                  <Input 
-                    value={editForm.parent_name} 
-                    onChange={(e) => setEditForm({ ...editForm, parent_name: e.target.value })} 
-                  />
-                </div>
-                <div>
-                  <Label>Parent Phone</Label>
-                  <Input 
-                    value={editForm.parent_phone} 
-                    onChange={(e) => setEditForm({ ...editForm, parent_phone: e.target.value })} 
-                  />
-                </div>
+                <div><Label>Parent Name</Label><Input value={editForm.parent_name} onChange={(e) => setEditForm({ ...editForm, parent_name: e.target.value })} /></div>
+                <div><Label>Parent Phone</Label><Input value={editForm.parent_phone} onChange={(e) => setEditForm({ ...editForm, parent_phone: e.target.value })} /></div>
                 <div>
                   <Label>Status</Label>
                   <Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v as "new" | "old" | "admitted" })}>
@@ -298,6 +220,96 @@ export default function PupilProfile() {
               <p className="text-2xl font-bold font-heading text-secondary">ZMW {totalBalance.toLocaleString()}</p>
             </div>
           </div>
+
+          {/* PAYMENT SECTION - IMMEDIATELY VISIBLE */}
+          {(() => {
+            console.log('School fees:', schoolFees);
+            console.log('Other fees:', otherFees);
+
+            const payableFees = [...schoolFees, ...otherFees]
+              .filter(f => Number(f.balance) > 0 && !f.paid_toggle)
+              .sort((a, b) => Number(b.balance) - Number(a.balance));
+
+            console.log('Payable fees:', payableFees);
+
+            if (payableFees.length > 0) {
+              return (
+                <div className="border border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950/20 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-lg font-semibold text-orange-800 dark:text-orange-200 flex items-center">
+                      <DollarSign className="h-5 w-5 mr-2" />
+                      Outstanding Payments ({payableFees.length})
+                    </h3>
+                    <Badge variant="secondary" className="bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200">
+                      Action Required
+                    </Badge>
+                  </div>
+
+                  <div className="space-y-3">
+                    {payableFees.slice(0, 3).map((fee) => (
+                      <div key={fee.id} className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-md border border-orange-100 dark:border-orange-800">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">
+                              {'fee_type' in fee ? fee.fee_type : 'School Fee'}
+                            </span>
+                            {'terms' in fee && fee.terms && (
+                              <Badge variant="outline" className="text-xs">
+                                {fee.terms.name}
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            Balance: <span className="font-semibold text-orange-600">ZMW {Number(fee.balance).toLocaleString()}</span>
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            console.log('Pay button clicked for fee:', fee);
+                            console.log('Setting payFee to:', fee);
+                            setPayFee(fee);
+                            console.log('Setting payOpen to true');
+                            setPayOpen(true);
+                          }}
+                          className="bg-green-600 hover:bg-green-700 text-white min-w-[100px]"
+                          aria-label={`Record payment for ${'fee_type' in fee ? fee.fee_type : 'school fee'}`}
+                        >
+                          <DollarSign className="h-4 w-4 mr-1" />
+                          Pay Now
+                        </Button>
+                      </div>
+                    ))}
+
+                    {payableFees.length > 3 && (
+                      <p className="text-sm text-center text-muted-foreground">
+                        +{payableFees.length - 3} more fees • Check School Fees & Other Fees tabs
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div className="border border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-green-800 dark:text-green-200 flex items-center">
+                      <CheckCircle className="h-5 w-5 mr-2" />
+                      All Fees Paid
+                    </h3>
+                    <p className="text-sm text-green-600 dark:text-green-400 mt-1">
+                      No outstanding payments for this pupil
+                    </p>
+                  </div>
+                  <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                    Up to Date
+                  </Badge>
+                </div>
+              </div>
+            );
+          })()}
         </TabsContent>
 
         <TabsContent value="school-fees" className="mt-4">
@@ -336,7 +348,12 @@ export default function PupilProfile() {
                     />
                     <p className="text-xs text-muted-foreground mt-1">Standard school fee is ZMW 2,400 per term</p>
                   </div>
-                  <Button onClick={handleCreateFee} className="w-full" disabled={!feeForm.term_id}>
+                  <Button onClick={async () => {
+                    if (!id) return;
+                    await createSchoolFee({ pupil_id: id, term_id: feeForm.term_id, total_expected: feeForm.total_expected, collected: 0 });
+                    setFeeOpen(false); setFeeForm({ term_id: "", total_expected: 2400 }); load();
+                    toast({ title: "School fee created" });
+                  }} className="w-full" disabled={!feeForm.term_id}>
                     Assign School Fee
                   </Button>
                 </div>
@@ -366,7 +383,11 @@ export default function PupilProfile() {
                     <TableCell><Badge variant={f.paid_toggle ? 'default' : 'secondary'}>{f.paid_toggle ? 'Yes' : 'No'}</Badge></TableCell>
                     <TableCell>
                       {Number(f.balance) > 0 && !f.paid_toggle && (
-                        <Button size="sm" variant="outline" onClick={() => { setPayFee(f); setPayOpen(true); }}>
+                        <Button size="sm" variant="outline" onClick={() => {
+                          console.log('Table pay button clicked for fee:', f);
+                          setPayFee(f);
+                          setPayOpen(true);
+                        }}>
                           Record Payment
                         </Button>
                       )}
@@ -381,13 +402,118 @@ export default function PupilProfile() {
           </div>
 
           <Dialog open={payOpen} onOpenChange={setPayOpen}>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
-              <div className="space-y-3 pt-2">
-                <p className="text-sm text-muted-foreground">Outstanding: ZMW {Number(payFee?.balance ?? 0).toLocaleString()}</p>
-                <div><Label>Amount</Label><Input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} max={payFee?.balance} /></div>
-                {payFee && 'total_expected' in payFee && <div><Label>RCT No</Label><Input value={payRCT} onChange={(e) => setPayRCT(e.target.value)} /></div>}
-                <Button onClick={handlePayment} className="w-full">Confirm Payment</Button>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Record Payment</DialogTitle>
+                <p className="text-sm text-muted-foreground">
+                  Fee: {payFee ? ('fee_type' in payFee ? payFee.fee_type : 'School Fee') : "-"}
+                </p>
+              </DialogHeader>
+              <div className="space-y-4 pt-2">
+                <div className="p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-sm font-medium">Outstanding Balance:</span>
+                    <span className="text-lg font-bold text-blue-600 dark:text-blue-400">
+                      ZMW {Number(payFee?.balance ?? 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Payment Type Selection */}
+                <div className="space-y-3">
+                  <Label className="text-base font-medium">Payment Type</Label>
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="radio"
+                        id="full-payment"
+                        name="payment-type"
+                        checked={paymentType === "full"}
+                        onChange={() => setPaymentType("full")}
+                        className="w-4 h-4"
+                      />
+                      <Label htmlFor="full-payment" className="cursor-pointer">
+                        Full Payment - Pay the entire outstanding balance
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="radio"
+                        id="partial-payment"
+                        name="payment-type"
+                        checked={paymentType === "partial"}
+                        onChange={() => setPaymentType("partial")}
+                        className="w-4 h-4"
+                      />
+                      <Label htmlFor="partial-payment" className="cursor-pointer">
+                        Partial Payment - Pay a portion of the balance
+                      </Label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Amount Input - Only show for partial payments */}
+                {paymentType === "partial" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="payment-amount">Payment Amount (ZMW)</Label>
+                    <Input
+                      id="payment-amount"
+                      type="number"
+                      value={payAmount}
+                      onChange={(e) => setPayAmount(e.target.value)}
+                      placeholder="Enter payment amount"
+                      max={payFee?.balance}
+                      min="0"
+                      step="0.01"
+                    />
+                    {payAmount && Number(payAmount) > 0 && (
+                      <div className="text-xs text-muted-foreground">
+                        Remaining balance after payment: ZMW {(Number(payFee?.balance ?? 0) - Number(payAmount)).toLocaleString()}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Amount Display for Full Payment */}
+                {paymentType === "full" && (
+                  <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-lg border border-green-200 dark:border-green-800">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium">Amount to be paid:</span>
+                      <span className="text-lg font-bold text-green-600 dark:text-green-400">
+                        ZMW {Number(payFee?.balance ?? 0).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {payFee && 'total_expected' in payFee && (
+                  <div className="space-y-2">
+                    <Label htmlFor="rct-number">RCT Number (Receipt)</Label>
+                    <Input
+                      id="rct-number"
+                      value={payRCT}
+                      onChange={(e) => setPayRCT(e.target.value)}
+                      placeholder="Enter RCT number"
+                    />
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setPayOpen(false)}
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handlePayment}
+                    disabled={paymentType === "partial" && (!payAmount || Number(payAmount) <= 0 || Number(payAmount) > Number(payFee?.balance ?? 0))}
+                    className="flex-1 bg-green-600 hover:bg-green-700"
+                  >
+                    Record {paymentType === "full" ? "Full" : "Partial"} Payment
+                  </Button>
+                </div>
               </div>
             </DialogContent>
           </Dialog>
@@ -408,7 +534,14 @@ export default function PupilProfile() {
                   </div>
                   <div><Label>Fee Type</Label><Input value={otherForm.fee_type} onChange={(e) => setOtherForm({ ...otherForm, fee_type: e.target.value })} placeholder="e.g. Exam Fee" /></div>
                   <div><Label>Total Expected</Label><Input type="number" value={otherForm.total_expected} onChange={(e) => setOtherForm({ ...otherForm, total_expected: +e.target.value })} /></div>
-                  <Button onClick={handleOtherFee} className="w-full">Add Fee</Button>
+                  <Button onClick={async () => {
+                    if (!id || !otherForm.term_id || !otherForm.fee_type) return;
+                    await createOtherFee({ pupil_id: id, term_id: otherForm.term_id, fee_type: otherForm.fee_type, total_expected: otherForm.total_expected });
+                    setOtherOpen(false);
+                    setOtherForm({ term_id: "", fee_type: "", total_expected: 0 });
+                    load();
+                    toast({ title: "Other fee added" });
+                  }} className="w-full">Add Other Fee</Button>
                 </div>
               </DialogContent>
             </Dialog>

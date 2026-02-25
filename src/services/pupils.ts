@@ -9,6 +9,11 @@ export const getPupil = async (id: string): Promise<Pupil> => {
 
 export const getPupils = async (gradeId?: string): Promise<Pupil[]> => {
   let query = supabase.from("pupils").select("*, grades(name)", { count: 'exact' });
+
+  if (gradeId) {
+    query = query.eq("grade_id", gradeId);
+  }
+
   const { data, error } = await query;
   if (error) throw error;
   return data as Pupil[];

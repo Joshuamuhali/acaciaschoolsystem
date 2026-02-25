@@ -4,6 +4,7 @@ export interface Grade {
   level_order: number;
   section: string | null;
   is_active: boolean;
+  default_fees: string[];
   created_at: string;
 }
 

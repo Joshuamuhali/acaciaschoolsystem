@@ -42,12 +42,13 @@ export const deleteGrade = async (id: string) => {
   if (error) throw error;
 };
 
-export const getGradeCounts = async (): Promise<{ name: string; count: number }[]> => {
+export const getGradeCounts = async (): Promise<{ id: string; name: string; count: number }[]> => {
   const [grades, pupils] = await Promise.all([
     getGrades(),
     supabase.from("pupils").select("grade_id, status"), // Get all pupils with status
   ]);
   const counts = grades.map((g) => ({
+    id: g.id,
     name: g.name,
     count: pupils.data?.filter((p) => p.grade_id === g.id).length ?? 0, // Count all pupils in the grade
   }));

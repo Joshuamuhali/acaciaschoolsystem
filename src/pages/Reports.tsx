@@ -78,24 +78,31 @@ export default function Reports() {
           getOutstandingPerGrade(),
           getCollectionPerTerm(),
           getDailyCollection(),
-          supabase.from("pupils").select("id, full_name, admission_number, grades(name)").eq("status", "active").order("full_name"),
+          supabase.from("pupil_financial_summary").select("*").eq("status", "active").order("full_name"),
           getSchoolTotals(),
         ]);
-        setOutByGrade(a); setCollByTerm(b); setDaily(c); setSchoolTotals(totals);
 
-        // Get balances for each pupil
-        const { data: fees } = await supabase.from("school_fees").select("pupil_id, balance");
-        const balanceMap: Record<string, number> = {};
-        fees?.forEach((f) => { balanceMap[f.pupil_id] = (balanceMap[f.pupil_id] ?? 0) + Number(f.balance); });
+        // Transform data to match expected types
+        const transformedOutByGrade = (a || []).map(item => ({
+          name: item.grade_name,
+          outstanding: item.total_outstanding
+        }));
 
-        const { data: instData } = await supabase.from("installments").select("pupil_id, amount_paid");
-        const paidMap: Record<string, number> = {};
-        instData?.forEach((i) => { paidMap[i.pupil_id] = (paidMap[i.pupil_id] ?? 0) + Number(i.amount_paid); });
+        const transformedCollByTerm = (b || []).map(item => ({
+          name: item.term_name,
+          collected: item.total_collected
+        }));
 
+        setOutByGrade(transformedOutByGrade);
+        setCollByTerm(transformedCollByTerm);
+        setDaily(c);
+        setSchoolTotals(totals);
+
+        // Pupil statements now come directly from the view with pre-calculated balances
         const stmts = (ps.data ?? []).map((p: any) => ({
           ...p,
-          totalPaid: paidMap[p.id] ?? 0,
-          balance: balanceMap[p.id] ?? 0,
+          totalPaid: p.total_collected, // Already calculated in view
+          balance: p.total_balance, // Already calculated in view
         }));
         setPupilStatements(stmts);
       } catch (e: any) {
@@ -136,7 +143,39 @@ export default function Reports() {
         </TabsList>
 
         <TabsContent value="grade" className="mt-4">
-          <div className="flex justify-end mb-4">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center gap-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const sorted = [...outByGrade].sort((a, b) => a.name.localeCompare(b.name));
+                  setOutByGrade(sorted);
+                }}
+              >
+                Sort by Grade Name
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const sorted = [...outByGrade].sort((a, b) => b.outstanding - a.outstanding);
+                  setOutByGrade(sorted);
+                }}
+              >
+                Sort by Outstanding (High to Low)
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const sorted = [...outByGrade].sort((a, b) => a.outstanding - b.outstanding);
+                  setOutByGrade(sorted);
+                }}
+              >
+                Sort by Outstanding (Low to High)
+              </Button>
+            </div>
             <Button onClick={exportOutstandingByGrade} variant="outline">
               <Download className="h-4 w-4 mr-2" />
               Export CSV
@@ -198,18 +237,17 @@ export default function Reports() {
           </div>
           <div className="rounded-xl border bg-card overflow-hidden">
             <Table>
-              <TableHeader><TableRow><TableHead>Pupil</TableHead><TableHead>Adm No.</TableHead><TableHead>Grade</TableHead><TableHead>Total Paid</TableHead><TableHead>Balance</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>Pupil</TableHead><TableHead>Grade</TableHead><TableHead>Total Paid</TableHead><TableHead>Balance</TableHead></TableRow></TableHeader>
               <TableBody>
                 {pupilStatements.map((p: any) => (
                   <TableRow key={p.id}>
                     <TableCell className="font-medium">{p.full_name}</TableCell>
-                    <TableCell>{p.admission_number}</TableCell>
                     <TableCell>{p.grades?.name}</TableCell>
                     <TableCell className="text-success font-semibold">ZMW {p.totalPaid.toLocaleString()}</TableCell>
                     <TableCell className="text-secondary font-semibold">ZMW {p.balance.toLocaleString()}</TableCell>
                   </TableRow>
                 ))}
-                {pupilStatements.length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-6">No data.</TableCell></TableRow>}
+                {pupilStatements.length === 0 && <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-6">No data.</TableCell></TableRow>}
               </TableBody>
             </Table>
           </div>

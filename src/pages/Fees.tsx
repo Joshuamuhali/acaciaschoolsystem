@@ -19,7 +19,7 @@ export default function Fees() {
       try {
         const { data: fees, error } = await supabase
           .from("school_fees")
-          .select("*, pupils(full_name, admission_number, grades(name)), terms(name)")
+          .select("*, pupils(full_name, grades(name)), terms(name)")
           .order("created_at", { ascending: false });
         if (error) throw error;
         setData(fees ?? []);
@@ -33,8 +33,7 @@ export default function Fees() {
   }, []);
 
   const filtered = data.filter((f: any) =>
-    f.pupils?.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-    f.pupils?.admission_number?.toLowerCase().includes(search.toLowerCase())
+    f.pupils?.full_name?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (

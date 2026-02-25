@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Users, DollarSign, AlertTriangle, GraduationCap, Database, RefreshCw } from "lucide-react";
 import { getDashboardStats } from "@/services/fees";
 import { getGradeCounts } from "@/services/grades";
 import { supabase } from "@/integrations/supabase/client";
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState({ 
     totalPupils: 0, 
     admittedPupils: 0,
@@ -13,7 +15,7 @@ export default function Dashboard() {
     totalOutstanding: 0,
     totalExpected: 0
   });
-  const [gradeCounts, setGradeCounts] = useState<{ name: string; count: number }[]>([]);
+  const [gradeCounts, setGradeCounts] = useState<{ id: string; name: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'checking' | 'connected' | 'error'>('checking');
@@ -117,7 +119,7 @@ export default function Dashboard() {
     window.location.reload();
   };
 
-  const cards = [
+  const schoolFeesCards = [
     { 
       label: "Total Pupils", 
       value: stats.totalPupils, 
@@ -125,9 +127,15 @@ export default function Dashboard() {
       color: "text-primary",
       detail: `${stats.admittedPupils} admitted, ${stats.newPupils} new`
     },
-    { label: "Total Expected", value: `ZMW ${stats.totalExpected.toLocaleString()}`, icon: DollarSign, color: "text-blue-500" },
-    { label: "Total Collected", value: `ZMW ${stats.totalCollected.toLocaleString()}`, icon: DollarSign, color: "text-success" },
-    { label: "Outstanding", value: `ZMW ${stats.totalOutstanding.toLocaleString()}`, icon: AlertTriangle, color: "text-secondary" },
+    { label: "Total Expected", value: `ZMW ${(stats as any).schoolFeesExpected?.toLocaleString() || '0'}`, icon: DollarSign, color: "text-blue-500", detail: undefined },
+    { label: "Total Collected", value: `ZMW ${(stats as any).schoolFeesCollected?.toLocaleString() || '0'}`, icon: DollarSign, color: "text-success", detail: undefined },
+    { label: "Outstanding", value: `ZMW ${(stats as any).schoolFeesOutstanding?.toLocaleString() || '0'}`, icon: AlertTriangle, color: "text-secondary", detail: undefined },
+  ];
+
+  const otherFeesCards = [
+    { label: "Total Expected", value: `ZMW ${(stats as any).otherFeesExpected?.toLocaleString() || '0'}`, icon: DollarSign, color: "text-blue-500", detail: undefined },
+    { label: "Total Collected", value: `ZMW ${(stats as any).otherFeesCollected?.toLocaleString() || '0'}`, icon: DollarSign, color: "text-success", detail: undefined },
+    { label: "Outstanding", value: `ZMW ${(stats as any).otherFeesOutstanding?.toLocaleString() || '0'}`, icon: AlertTriangle, color: "text-secondary", detail: undefined },
   ];
 
   if (loading) {
@@ -182,19 +190,42 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3 mb-8">
-        {cards.map((c) => (
-          <div key={c.label} className="stat-card flex items-center gap-4">
-            <div className={`p-3 rounded-xl bg-accent ${c.color}`}>
-              <c.icon className="h-6 w-6" />
+      {/* School Fees Section */}
+      <div className="mb-8">
+        <h2 className="text-xl font-heading font-semibold mb-4 text-primary">School Fees</h2>
+        <div className="grid gap-4 md:grid-cols-4">
+          {schoolFeesCards.map((c) => (
+            <div key={c.label} className="stat-card flex items-center gap-4">
+              <div className={`p-3 rounded-xl bg-accent ${c.color}`}>
+                <c.icon className="h-6 w-6" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">{c.label}</p>
+                <p className="text-2xl font-bold font-heading">{c.value}</p>
+                {c.detail && <p className="text-xs text-muted-foreground mt-1">{c.detail}</p>}
+              </div>
             </div>
-            <div>
-              <p className="text-sm text-muted-foreground">{c.label}</p>
-              <p className="text-2xl font-bold font-heading">{c.value}</p>
-              {c.detail && <p className="text-xs text-muted-foreground mt-1">{c.detail}</p>}
+          ))}
+        </div>
+      </div>
+
+      {/* Other Fees Section */}
+      <div className="mb-8">
+        <h2 className="text-xl font-heading font-semibold mb-4 text-primary">Other Fees</h2>
+        <div className="grid gap-4 md:grid-cols-3">
+          {otherFeesCards.map((c) => (
+            <div key={c.label} className="stat-card flex items-center gap-4">
+              <div className={`p-3 rounded-xl bg-accent ${c.color}`}>
+                <c.icon className="h-6 w-6" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">{c.label}</p>
+                <p className="text-2xl font-bold font-heading">{c.value}</p>
+                {c.detail && <p className="text-xs text-muted-foreground mt-1">{c.detail}</p>}
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       <div className="stat-card">
@@ -207,7 +238,12 @@ export default function Dashboard() {
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {gradeCounts.map((g) => (
-              <div key={g.name} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <div 
+                key={g.name} 
+                className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted cursor-pointer transition-colors"
+                onClick={() => navigate(`/pupils?grade=${g.id}`)}
+                title={`Click to view ${g.name} pupils`}
+              >
                 <span className="font-medium text-sm">{g.name}</span>
                 <span className="text-lg font-bold text-primary">{g.count}</span>
               </div>

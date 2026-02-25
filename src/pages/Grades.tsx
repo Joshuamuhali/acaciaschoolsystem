@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { Plus, Pencil, Trash2, Users, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { getGrades, createGrade, updateGrade, deleteGrade } from "@/services/grades";
@@ -21,9 +22,17 @@ export default function Grades() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [feeSettings, setFeeSettings] = useState<any[]>([]);
   const [gradeStats, setGradeStats] = useState<Record<string, { pupils: number; collected: number; outstanding: number }>>({});
-  const [form, setForm] = useState({ name: "", level_order: 0, section: "", is_active: true });
+  const [form, setForm] = useState({ name: "", level_order: 0, section: "", is_active: true, default_fees: [] as string[] });
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  // Available other fees that can be set as defaults for grades
+  const availableFees = [
+    { type: "Maintenance", amount: 250, description: "Facility maintenance fee" },
+    { type: "Sports", amount: 200, description: "Sports and physical education fee" },
+    { type: "Library", amount: 270, description: "Library and reading resources fee" },
+    { type: "PTC", amount: 300, description: "Parent Teacher Council fee" }
+  ];
 
   const load = async () => {
     setLoading(true);
@@ -50,7 +59,7 @@ export default function Grades() {
       }
       setOpen(false);
       setEditing(null);
-      setForm({ name: "", level_order: 0, section: "", is_active: true });
+      setForm({ name: "", level_order: 0, section: "", is_active: true, default_fees: [] });
       load();
       toast({ title: editing ? "Grade updated" : "Grade created" });
     } catch (e: any) {
@@ -60,7 +69,7 @@ export default function Grades() {
 
   const handleEdit = (grade: Grade) => {
     setEditing(grade);
-    setForm({ name: grade.name, level_order: grade.level_order, section: grade.section || "", is_active: grade.is_active });
+    setForm({ name: grade.name, level_order: grade.level_order, section: grade.section || "", is_active: grade.is_active, default_fees: grade.default_fees || [] });
     setOpen(true);
   };
 
@@ -94,15 +103,61 @@ export default function Grades() {
             <DialogTrigger asChild>
               <Button><Plus className="h-4 w-4 mr-2" />Add Grade</Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-h-[80vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editing ? "Edit Grade" : "New Grade"}</DialogTitle>
+                <DialogDescription>
+                  {editing ? "Update grade information and default fees." : "Create a new grade with optional default fees that will apply to all pupils in this grade."}
+                </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 pt-2">
                 <div><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Grade 1" /></div>
                 <div><Label>Level Order</Label><Input type="number" value={form.level_order} onChange={(e) => setForm({ ...form, level_order: Number(e.target.value) || 0 })} placeholder="e.g. 1" /></div>
                 <div><Label>Section</Label><Input value={form.section} onChange={(e) => setForm({ ...form, section: e.target.value })} placeholder="e.g. Primary" /></div>
                 <div className="flex items-center gap-2"><Switch checked={form.is_active} onCheckedChange={(v) => setForm({ ...form, is_active: v })} /><Label>Active</Label></div>
+
+                <div className="border-t pt-4">
+                  <Label className="text-base font-medium">Default Fees for Grade</Label>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Select which fees automatically apply to all pupils in this grade (School fee is always assigned)
+                  </p>
+                  <div className="space-y-3">
+                    {availableFees.map((fee) => (
+                      <div key={fee.type} className="flex items-center justify-between p-3 border rounded-lg">
+                        <div className="flex items-center space-x-3">
+                          <Checkbox
+                            id={`grade-fee-${fee.type}`}
+                            checked={form.default_fees.includes(fee.type)}
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                setForm({ ...form, default_fees: [...form.default_fees, fee.type] });
+                              } else {
+                                setForm({ ...form, default_fees: form.default_fees.filter(f => f !== fee.type) });
+                              }
+                            }}
+                          />
+                          <div>
+                            <Label htmlFor={`grade-fee-${fee.type}`} className="font-medium cursor-pointer">
+                              {fee.type}
+                            </Label>
+                            <p className="text-sm text-muted-foreground">{fee.description}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-semibold">ZMW {fee.amount.toLocaleString()}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {form.default_fees.length > 0 && (
+                    <div className="mt-3 p-3 bg-muted rounded-lg">
+                      <p className="text-sm font-medium">
+                        Default Fees Selected: {form.default_fees.join(", ")}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <Button onClick={handleSave} className="w-full">Save</Button>
               </div>
             </DialogContent>
