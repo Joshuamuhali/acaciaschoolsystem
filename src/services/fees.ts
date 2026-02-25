@@ -118,6 +118,64 @@ export const recordOtherFeePayment = async (
   return data;
 };
 
+// NEW: Accurate dashboard stats based on payment data
+export const getAccurateDashboardStats = async () => {
+  try {
+    // Get all pupils
+    const { data: pupils } = await supabase.from('pupils').select('id, status');
+    
+    // Get all school fees
+    const { data: schoolFees } = await supabase.from('school_fees').select('total_expected, total_collected, balance');
+    
+    // Get all other fees
+    const { data: otherFees } = await supabase.from('other_fees').select('total_expected, collected, balance, fee_type');
+    
+    // Get all installments for discount calculation
+    const { data: installments } = await supabase.from('installments').select('amount_paid, discount_applied');
+    
+    const totalPupils = pupils?.length || 0;
+    const admittedPupils = pupils?.filter(p => p.status === 'admitted').length || 0;
+    const newPupils = pupils?.filter(p => p.status === 'new').length || 0;
+    
+    const schoolFeesExpected = schoolFees?.reduce((sum, f) => sum + Number(f.total_expected), 0) || 0;
+    const schoolFeesCollected = schoolFees?.reduce((sum, f) => sum + Number(f.total_collected), 0) || 0;
+    const schoolFeesOutstanding = schoolFees?.reduce((sum, f) => sum + Number(f.balance), 0) || 0;
+    
+    const otherFeesExpected = otherFees?.reduce((sum, f) => sum + Number(f.total_expected), 0) || 0;
+    const otherFeesCollected = otherFees?.reduce((sum, f) => sum + Number(f.collected), 0) || 0;
+    const otherFeesOutstanding = otherFees?.reduce((sum, f) => sum + Number(f.balance), 0) || 0;
+    
+    // Calculate discounts
+    const totalDiscountAmount = installments?.reduce((sum, i) => {
+      return sum + (Number(i.amount_paid) * Number(i.discount_applied) / 100);
+    }, 0) || 0;
+    
+    const pupilsWithDiscounts = new Set(
+      installments?.filter(i => i.discount_applied > 0).map(i => i.pupil_id)
+    ).size;
+    
+    return {
+      totalPupils,
+      admittedPupils,
+      newPupils,
+      schoolFeesExpected,
+      schoolFeesCollected,
+      schoolFeesOutstanding,
+      otherFeesExpected,
+      otherFeesCollected,
+      otherFeesOutstanding,
+      totalExpected: schoolFeesExpected + otherFeesExpected,
+      totalCollected: schoolFeesCollected + otherFeesCollected,
+      totalOutstanding: schoolFeesOutstanding + otherFeesOutstanding,
+      totalDiscountAmount,
+      pupilsWithDiscounts
+    };
+  } catch (error) {
+    console.error('Error calculating dashboard stats:', error);
+    throw error;
+  }
+};
+
 // Dashboard stats - Now using database view for optimal performance
 export const getDashboardStats = async () => {
   const { data, error } = await supabase
@@ -127,26 +185,7 @@ export const getDashboardStats = async () => {
 
   if (error) throw error;
 
-  // Calculate total expected fees as 2,400 * number of pupils (grade-level calculation)
-  const totalExpectedFees = data.total_pupils * 2400;
-
-  return {
-    totalPupils: data.total_pupils,
-    admittedPupils: data.admitted_pupils,
-    newPupils: data.new_pupils,
-    // School fees stats
-    schoolFeesExpected: data.school_fees_expected,
-    schoolFeesCollected: data.school_fees_collected,
-    schoolFeesOutstanding: data.school_fees_outstanding,
-    // Other fees stats
-    otherFeesExpected: data.other_fees_expected,
-    otherFeesCollected: data.other_fees_collected,
-    otherFeesOutstanding: data.other_fees_outstanding,
-    // Combined totals (for backward compatibility)
-    totalCollected: data.total_collected,
-    totalOutstanding: data.total_outstanding,
-    totalExpected: totalExpectedFees // Explicitly calculated as 2,400 * pupil count
-  };
+  return data;
 };
 
 // Reports - Now using database views for optimal performance
@@ -193,8 +232,57 @@ export const getSchoolTotals = async () => {
     supabase.from("other_fees").select("total_expected, collected")
   ]);
 
-  const totalExpected = (schoolFees.data?.reduce((sum, f) => sum + Number(f.total_expected), 0) ?? 0) + (otherFees.data?.reduce((sum, f) => sum + Number(f.total_expected), 0) ?? 0);
-  const totalCollected = (schoolFees.data?.reduce((sum, f) => sum + Number(f.total_collected), 0) ?? 0) + (otherFees.data?.reduce((sum, f) => sum + Number(f.collected), 0) ?? 0);
+  const totalExpected = (schoolFees.data?.reduce((sum, f) => sum + Number(f.total_expected), 0) ?? 0);
+  const totalCollected = (schoolFees.data?.reduce((sum, f) => sum + Number(f.total_collected), 0) ?? 0);
 
   return { totalExpected, totalCollected };
+};
+
+export const getOtherFeesBreakdown = async () => {
+  const { data, error } = await supabase
+    .from('other_fees_breakdown')
+    .select('*');
+
+  if (error) throw error;
+
+  return data || [];
+};
+
+export const getPupilsByFeeType = async (feeType: string) => {
+  const { data, error } = await supabase
+    .from("other_fees")
+    .select("*, pupils(*, grades(*))")
+    .eq("fee_type", feeType)
+    .gt("balance", 0)
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+
+  return data || [];
+};
+
+export const getDiscountBreakdown = async (): Promise<{ discount_percentage: number; pupils: string[] }[]> => {
+  const { data, error } = await supabase
+    .from("installments")
+    .select("discount_applied, pupils(full_name)")
+    .gt("discount_applied", 0)
+    .order("discount_applied", { ascending: false });
+
+  if (error) throw error;
+
+  // Group by discount_applied
+  const grouped: Record<number, string[]> = {};
+  data?.forEach((item: any) => {
+    const discount = item.discount_applied;
+    const pupilName = item.pupils.full_name;
+    if (!grouped[discount]) grouped[discount] = [];
+    if (!grouped[discount].includes(pupilName)) {
+      grouped[discount].push(pupilName);
+    }
+  });
+
+  return Object.keys(grouped).map((discount) => ({
+    discount_percentage: Number(discount),
+    pupils: grouped[discount],
+  }));
 };
