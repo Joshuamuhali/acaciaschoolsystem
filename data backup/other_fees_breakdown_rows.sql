@@ -1,0 +1,1 @@
+INSERT INTO "public"."other_fees_breakdown" ("fee_type", "pupil_count", "total_expected", "total_collected", "outstanding") VALUES ('Library', '129', '34830.00', '0.00', '34830.00'), ('Maintenance', '156', '39000.00', '0.00', '39000.00'), ('PTC', '156', '46800.00', '0.00', '46800.00'), ('Sports', '156', '31200.00', '0.00', '31200.00');

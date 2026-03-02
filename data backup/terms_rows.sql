@@ -1,0 +1,1 @@
+INSERT INTO "public"."terms" ("id", "name", "start_date", "end_date", "is_active", "created_at") VALUES ('bb7f5354-ac83-42b1-b14c-dcbb578b23fb', 'Term 1 2026', '2026-01-01', '2026-04-30', 'true', '2026-02-26 09:28:08.700598+00');

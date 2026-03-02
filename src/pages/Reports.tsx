@@ -6,6 +6,7 @@ import { getOutstandingPerGrade, getCollectionPerTerm, getDailyCollection, getSc
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Download, FileText } from "lucide-react";
+import { SkeletonTable, SkeletonStatsCard } from "@/components/skeleton";
 
 export default function Reports() {
   const { toast } = useToast();
@@ -84,13 +85,13 @@ export default function Reports() {
 
         // Transform data to match expected types
         const transformedOutByGrade = (a || []).map(item => ({
-          name: item.grade_name,
-          outstanding: item.total_outstanding
+          name: item.grade_name || 'Unknown',
+          outstanding: item.total_outstanding || 0
         }));
 
-        const transformedCollByTerm = (b || []).map(item => ({
-          name: item.term_name,
-          collected: item.total_collected
+        const transformedCollByTerm = (b || []).map((item: any) => ({
+          name: item.term,
+          collected: item.collected
         }));
 
         setOutByGrade(transformedOutByGrade);
@@ -114,7 +115,24 @@ export default function Reports() {
     load();
   }, []);
 
-  if (loading) return <div className="flex items-center justify-center h-64 text-muted-foreground">Loading...</div>;
+  if (loading) {
+    return (
+      <div>
+        <div className="page-header">
+          <div className="h-8 w-32 bg-muted rounded animate-pulse mb-2" />
+          <div className="h-4 w-64 bg-muted rounded animate-pulse" />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 mb-6">
+          <SkeletonStatsCard />
+          <SkeletonStatsCard />
+        </div>
+
+        <div className="h-10 w-full bg-muted rounded animate-pulse mb-4" />
+        <SkeletonTable rows={6} columns={2} />
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -186,7 +204,7 @@ export default function Reports() {
               <TableHeader><TableRow><TableHead>Grade</TableHead><TableHead>Outstanding</TableHead></TableRow></TableHeader>
               <TableBody>
                 {outByGrade.map((r) => (
-                  <TableRow key={r.name}><TableCell className="font-medium">{r.name}</TableCell><TableCell className="text-secondary font-semibold">ZMW {r.outstanding.toLocaleString()}</TableCell></TableRow>
+                  <TableRow key={r.name}><TableCell className="font-medium">{r.name}</TableCell><TableCell className="text-secondary font-semibold">ZMW {(r.outstanding || 0).toLocaleString()}</TableCell></TableRow>
                 ))}
                 {outByGrade.length === 0 && <TableRow><TableCell colSpan={2} className="text-center text-muted-foreground py-6">No data.</TableCell></TableRow>}
               </TableBody>

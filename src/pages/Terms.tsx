@@ -16,7 +16,7 @@ export default function Terms() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Term | null>(null);
-  const [form, setForm] = useState({ name: "", start_date: "", end_date: "", is_active: false });
+  const [form, setForm] = useState({ name: "", academic_year_id: "", term_number: 1, is_active: false });
   const { toast } = useToast();
 
   const load = async () => {
@@ -33,15 +33,20 @@ export default function Terms() {
 
   const handleSave = async () => {
     try {
-      if (editing) { await updateTerm(editing.id, form); } else { await createTerm(form); }
-      setOpen(false); setEditing(null); setForm({ name: "", start_date: "", end_date: "", is_active: false });
+      const formData = {
+        ...form,
+        academic_year_id: parseInt(form.academic_year_id)
+      };
+      
+      if (editing) { await updateTerm(editing.id, formData); } else { await createTerm(formData); }
+      setOpen(false); setEditing(null); setForm({ name: "", academic_year_id: "", term_number: 1, is_active: false });
       load(); toast({ title: editing ? "Term updated" : "Term created" });
     } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); }
   };
 
   const handleEdit = (t: Term) => {
     setEditing(t);
-    setForm({ name: t.name, start_date: t.start_date, end_date: t.end_date, is_active: t.is_active });
+    setForm({ name: t.name || `Term ${t.term_number}`, academic_year_id: t.academic_year_id?.toString() || '', term_number: t.term_number || 1, is_active: t.is_active });
     setOpen(true);
   };
   const handleDelete = async (id: string) => { if (!confirm("Delete this term?")) return; try { await deleteTerm(id); load(); toast({ title: "Term deleted" }); } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); } };
@@ -53,14 +58,14 @@ export default function Terms() {
     <div>
       <div className="flex items-center justify-between page-header">
         <div><h1 className="page-title font-heading">Terms</h1><p className="page-description">Manage academic terms</p></div>
-        <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setEditing(null); setForm({ name: "", start_date: "", end_date: "", is_active: false }); } }}>
+        <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setEditing(null); setForm({ name: "", academic_year_id: "", term_number: 1, is_active: false }); } }}>
           <DialogTrigger asChild><Button><Plus className="h-4 w-4 mr-2" />Add Term</Button></DialogTrigger>
           <DialogContent>
             <DialogHeader><DialogTitle>{editing ? "Edit Term" : "New Term"}</DialogTitle></DialogHeader>
             <div className="space-y-3 pt-2">
               <div><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Term 1 2025" /></div>
-              <div><Label>Start Date</Label><Input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} /></div>
-              <div><Label>End Date</Label><Input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} /></div>
+              <div><Label>Academic Year ID</Label><Input value={form.academic_year_id} onChange={(e) => setForm({ ...form, academic_year_id: e.target.value })} placeholder="e.g. 1" /></div>
+              <div><Label>Term Number</Label><Input type="number" min="1" max="3" value={form.term_number} onChange={(e) => setForm({ ...form, term_number: parseInt(e.target.value) || 1 })} /></div>
               <div className="flex items-center gap-2"><Switch checked={form.is_active} onCheckedChange={(v) => setForm({ ...form, is_active: v })} /><Label>Active</Label></div>
               <Button onClick={handleSave} className="w-full">Save</Button>
             </div>
@@ -71,13 +76,13 @@ export default function Terms() {
       {loading ? <p className="text-muted-foreground">Loading...</p> : (
         <div className="rounded-xl border bg-card overflow-hidden">
           <Table>
-            <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Start</TableHead><TableHead>End</TableHead><TableHead>Status</TableHead><TableHead className="w-24">Actions</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Term Number</TableHead><TableHead>Academic Year</TableHead><TableHead>Status</TableHead><TableHead className="w-24">Actions</TableHead></TableRow></TableHeader>
             <TableBody>
               {terms.map((t) => (
                 <TableRow key={t.id}>
-                  <TableCell className="font-medium">{t.name}</TableCell>
-                  <TableCell>{new Date(t.start_date).toLocaleDateString()}</TableCell>
-                  <TableCell>{new Date(t.end_date).toLocaleDateString()}</TableCell>
+                  <TableCell className="font-medium">{t.name || `Term ${t.term_number}`}</TableCell>
+                  <TableCell>{t.term_number}</TableCell>
+                  <TableCell>{t.academic_year_id}</TableCell>
                   <TableCell><Badge variant={t.is_active ? "default" : "secondary"}>{t.is_active ? "Active" : "Inactive"}</Badge></TableCell>
                   <TableCell>
                     <div className="flex gap-1">

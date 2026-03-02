@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, GraduationCap, Users, CalendarDays,
-  DollarSign, BarChart3, Settings,
+  DollarSign, BarChart3, Settings, Shield, UserCheck,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import schoolLogo from "@/assets/school-logo.png";
@@ -14,10 +14,11 @@ const items = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Grades", url: "/grades", icon: GraduationCap },
   { title: "Pupils", url: "/pupils", icon: Users },
+  { title: "Parents", url: "/parents", icon: UserCheck },
   { title: "Terms", url: "/terms", icon: CalendarDays },
   { title: "Fees", url: "/fees", icon: DollarSign },
   { title: "Reports", url: "/reports", icon: BarChart3 },
-  { title: "Settings", url: "/settings", icon: Settings },
+  { title: "Settings", url: "/settings", icon: Shield },
 ];
 
 export function AppSidebar() {

@@ -27,6 +27,7 @@ const safeSupabaseQuery = async <T = any>(
       // Handle network errors
       if (error.message?.includes('fetch') || error.message?.includes('network')) {
         console.error(`Network error accessing table '${tableName}'. Retrying...`, error);
+        // Optional: Implement retry logic here
         return fallbackData;
       }
       
@@ -40,6 +41,29 @@ const safeSupabaseQuery = async <T = any>(
     console.error(`Unexpected error accessing table '${tableName}':`, err);
     return fallbackData;
   }
+};
+
+// Helper function for retry logic
+const retryQuery = async <T>(
+  queryFn: () => Promise<T>,
+  maxRetries: number = 3,
+  delay: number = 1000
+): Promise<T | null> => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await queryFn();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        console.error(`Query failed after ${maxRetries} attempts:`, error);
+        throw error;
+      }
+      
+      console.warn(`Query attempt ${attempt} failed, retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2; // Exponential backoff
+    }
+  }
+  return null;
 };
 
 // School Fees - Updated to match your schema (enrollments table)
@@ -376,368 +400,6 @@ export const removePupilDiscount = async (pupilId: string, appliesTo: string, te
   }
 };
 
-// DASHBOARD STATS FUNCTIONS (UPDATED FOR NEW SCHEMA)
-export const getAccurateDashboardStats = async (): Promise<any> => {
-  try {
-    // Get enrollments data (school fees)
-    const { data: enrollments, error: enrollmentError } = await supabase
-      .from("enrollments")
-      .select(`
-        school_fees_expected,
-        school_fees_paid,
-        pupils!inner(full_name),
-        grades!inner(name)
-      `);
-    
-    if (enrollmentError) {
-      console.error('Error fetching enrollments:', enrollmentError);
-      return {
-        totalPupils: 0,
-        schoolFeesExpected: 0,
-        schoolFeesCollected: 0,
-        schoolFeesOutstanding: 0,
-        otherFeesExpected: 0,
-        otherFeesCollected: 0,
-        otherFeesOutstanding: 0,
-        totalExpected: 0,
-        totalCollected: 0,
-        totalOutstanding: 0
-      };
-    }
-    
-    // Get pupil_other_fees data
-    const { data: otherFees, error: otherFeesError } = await supabase
-      .from("pupil_other_fees")
-      .select(`
-        amount,
-        amount_paid,
-        other_fee_types!inner(name),
-        enrollments!inner(pupils!inner(full_name))
-      `);
-    
-    if (otherFeesError) {
-      console.error('Error fetching other fees:', otherFeesError);
-    }
-    
-    const totalPupils = enrollments?.length || 0;
-    const schoolFeesExpected = enrollments?.reduce((sum, e) => sum + (e.school_fees_expected || 0), 0) || 0;
-    const schoolFeesCollected = enrollments?.reduce((sum, e) => sum + (e.school_fees_paid || 0), 0) || 0;
-    const schoolFeesOutstanding = schoolFeesExpected - schoolFeesCollected;
-    
-    const otherFeesExpected = otherFees?.reduce((sum, f) => sum + (f.amount || 0), 0) || 0;
-    const otherFeesCollected = otherFees?.reduce((sum, f) => sum + (f.amount_paid || 0), 0) || 0;
-    const otherFeesOutstanding = otherFeesExpected - otherFeesCollected;
-    
-    return {
-      totalPupils,
-      schoolFeesExpected,
-      schoolFeesCollected,
-      schoolFeesOutstanding,
-      otherFeesExpected,
-      otherFeesCollected,
-      otherFeesOutstanding,
-      totalExpected: schoolFeesExpected + otherFeesExpected,
-      totalCollected: schoolFeesCollected + otherFeesCollected,
-      totalOutstanding: schoolFeesOutstanding + otherFeesOutstanding
-    };
-  } catch (err) {
-    console.error('Error getting dashboard stats:', err);
-    return {
-      totalPupils: 0,
-      schoolFeesExpected: 0,
-      schoolFeesCollected: 0,
-      schoolFeesOutstanding: 0,
-      otherFeesExpected: 0,
-      otherFeesCollected: 0,
-      otherFeesOutstanding: 0,
-      totalExpected: 0,
-      totalCollected: 0,
-      totalOutstanding: 0
-    };
-  }
-};
-
-export const getFeeTypeStats = async (feeType?: string): Promise<any> => {
-  try {
-    let query = supabase
-      .from("pupil_other_fees")
-      .select(`
-        amount,
-        amount_paid,
-        other_fee_types!inner(name)
-      `);
-    
-    if (feeType && feeType !== 'all') {
-      query = query.eq("other_fee_types.name", feeType);
-    }
-    
-    const { data, error } = await query;
-    
-    if (error) {
-      console.error('Error getting fee type stats:', error);
-      return {
-        expected: 0,
-        collected: 0,
-        outstanding: 0,
-        feeType: feeType || 'all',
-        count: 0
-      };
-    }
-    
-    const expected = data?.reduce((sum, f) => sum + (f.amount || 0), 0) || 0;
-    const collected = data?.reduce((sum, f) => sum + (f.amount_paid || 0), 0) || 0;
-    const outstanding = expected - collected;
-    
-    return {
-      expected,
-      collected,
-      outstanding,
-      feeType: feeType || 'all',
-      count: data?.length || 0
-    };
-  } catch (err) {
-    console.error('Error getting fee type stats:', err);
-    return {
-      expected: 0,
-      collected: 0,
-      outstanding: 0,
-      feeType: feeType || 'all',
-      count: 0
-    };
-  }
-};
-
-export const getOtherFeesBreakdown = async (): Promise<any> => {
-  try {
-    const { data, error } = await supabase
-      .from("pupil_other_fees")
-      .select(`
-        amount,
-        amount_paid,
-        other_fee_types!inner(name)
-      `);
-    
-    if (error) {
-      console.error('Error getting other fees breakdown:', error);
-      return {
-        totalExpected: 0,
-        totalCollected: 0,
-        totalOutstanding: 0,
-        breakdown: []
-      };
-    }
-    
-    // Group by fee type
-    const breakdown: any = {};
-    data?.forEach((fee: any) => {
-      const typeName = fee.other_fee_types?.name || 'Unknown';
-      if (!breakdown[typeName]) {
-        breakdown[typeName] = {
-          expected: 0,
-          collected: 0,
-          outstanding: 0,
-          count: 0
-        };
-      }
-      breakdown[typeName].expected += fee.amount || 0;
-      breakdown[typeName].collected += fee.amount_paid || 0;
-      breakdown[typeName].outstanding += (fee.amount || 0) - (fee.amount_paid || 0);
-      breakdown[typeName].count += 1;
-    });
-    
-    const totalExpected = Object.values(breakdown).reduce((sum: number, item: any) => sum + Number(item.expected || 0), 0);
-    const totalCollected = Object.values(breakdown).reduce((sum: number, item: any) => sum + Number(item.collected || 0), 0);
-    const totalOutstanding = Number(totalExpected) - Number(totalCollected);
-    
-    return {
-      totalExpected,
-      totalCollected,
-      totalOutstanding,
-      breakdown: Object.entries(breakdown).map(([name, stats]) => ({ name, ...(stats as any) }))
-    };
-  } catch (err) {
-    console.error('Error getting other fees breakdown:', err);
-    return {
-      totalExpected: 0,
-      totalCollected: 0,
-      totalOutstanding: 0,
-      breakdown: []
-    };
-  }
-};
-
-// ADDITIONAL REPORTING FUNCTIONS
-export const getOutstandingPerGrade = async (): Promise<any[]> => {
-  try {
-    const { data, error } = await supabase
-      .from("enrollments")
-      .select(`
-        school_fees_expected,
-        school_fees_paid,
-        grades!inner(name)
-      `);
-    
-    if (error) {
-      console.error('Error getting outstanding per grade:', error);
-      return [];
-    }
-    
-    // Group by grade and calculate outstanding
-    const gradeData: any = {};
-    data?.forEach((enrollment: any) => {
-      const gradeName = enrollment.grades?.name || 'Unknown';
-      if (!gradeData[gradeName]) {
-        gradeData[gradeName] = {
-          grade: gradeName,
-          expected: 0,
-          collected: 0,
-          outstanding: 0,
-          pupils: 0
-        };
-      }
-      gradeData[gradeName].expected += enrollment.school_fees_expected || 0;
-      gradeData[gradeName].collected += enrollment.school_fees_paid || 0;
-      gradeData[gradeName].pupils += 1;
-    });
-    
-    Object.values(gradeData).forEach((grade: any) => {
-      grade.outstanding = grade.expected - grade.collected;
-    });
-    
-    return Object.values(gradeData);
-  } catch (err) {
-    console.error('Unexpected error getting outstanding per grade:', err);
-    return [];
-  }
-};
-
-export const getCollectionPerTerm = async () => {
-  try {
-    // Get enrollments with school fees data
-    const { data: enrollments, error } = await supabase
-      .from('enrollments')
-      .select('school_fees_expected, school_fees_paid, terms!inner(name, term_number)')
-      .order('created_at', { ascending: false });
-    
-    if (error) {
-      console.error('Error getting collection per term:', error);
-      return [];
-    }
-    
-    // Group by term and calculate collections
-    const termData: any = {};
-    enrollments?.forEach((enrollment: any) => {
-      const termName = `Term ${enrollment.terms?.term_number || 'Unknown'}`;
-      if (!termData[termName]) {
-        termData[termName] = {
-          term: termName,
-          term_number: enrollment.terms?.term_number || 0,
-          expected: 0,
-          collected: 0,
-          outstanding: 0,
-          enrollments: []
-        };
-      }
-      
-      termData[termName].expected += enrollment.school_fees_expected || 0;
-      termData[termName].collected += enrollment.school_fees_paid || 0;
-      termData[termName].outstanding = termData[termName].expected - termData[termName].collected;
-      termData[termName].enrollments.push(enrollment);
-    });
-    
-    return Object.values(termData);
-  } catch (error) {
-    console.error('Error in getCollectionPerTerm:', error);
-    return [];
-  }
-};
-
-export const getDailyCollection = async (dateRange?: { start: string; end: string }): Promise<any[]> => {
-  try {
-    let query = supabase
-      .from("payments")
-      .select(`
-        amount,
-        payment_date,
-        enrollments!inner(
-          pupils!inner(full_name)
-        )
-      `)
-      .order("payment_date", { ascending: true });
-    
-    if (dateRange) {
-      query = query
-        .gte("payment_date", dateRange.start)
-        .lte("payment_date", dateRange.end);
-    }
-    
-    const { data, error } = await query;
-    
-    if (error) {
-      console.error('Error getting daily collection:', error);
-      return [];
-    }
-    
-    // Group by date
-    const dailyData: any = {};
-    data?.forEach((payment: any) => {
-      const date = new Date(payment.payment_date).toLocaleDateString();
-      if (!dailyData[date]) {
-        dailyData[date] = {
-          date,
-          amount: 0,
-          transactions: 0
-        };
-      }
-      dailyData[date].amount += payment.amount || 0;
-      dailyData[date].transactions += 1;
-    });
-    
-    return Object.values(dailyData);
-  } catch (err) {
-    console.error('Unexpected error getting daily collection:', err);
-    return [];
-  }
-};
-
-export const getSchoolTotals = async (): Promise<any> => {
-  try {
-    const { data: enrollments, error: enrollmentError } = await supabase
-      .from("enrollments")
-      .select("school_fees_expected, school_fees_paid");
-    
-    if (enrollmentError) {
-      console.error('Error getting school totals:', enrollmentError);
-      return {
-        totalExpected: 0,
-        totalCollected: 0,
-        totalOutstanding: 0,
-        totalPupils: 0
-      };
-    }
-    
-    const totalExpected = enrollments?.reduce((sum, e) => sum + (e.school_fees_expected || 0), 0) || 0;
-    const totalCollected = enrollments?.reduce((sum, e) => sum + (e.school_fees_paid || 0), 0) || 0;
-    const totalOutstanding = totalExpected - totalCollected;
-    const totalPupils = enrollments?.length || 0;
-    
-    return {
-      totalExpected,
-      totalCollected,
-      totalOutstanding,
-      totalPupils
-    };
-  } catch (err) {
-    console.error('Unexpected error getting school totals:', err);
-    return {
-      totalExpected: 0,
-      totalCollected: 0,
-      totalOutstanding: 0,
-      totalPupils: 0
-    };
-  }
-};
-
 // TOGGLE OTHER FEE FUNCTION (UPDATED FOR NEW SCHEMA)
 export const toggleOtherFee = async (
   pupilId: string,
@@ -824,4 +486,265 @@ export const toggleOtherFee = async (
     console.error('Error toggling other fee:', error);
     throw error;
   }
+};
+    const admittedPupils = pupils?.filter(p => p.status === 'admitted').length || 0;
+    const newPupils = pupils?.filter(p => p.status === 'new').length || 0;
+    
+    // School fees: Fixed 2400 per pupil for expected amount
+    const schoolFeesExpected = totalPupils * 2400;
+    const schoolFeesCollected = schoolFees?.reduce((sum, f) => sum + Number(f.total_collected), 0) || 0;
+    const schoolFeesOutstanding = schoolFeesExpected - schoolFeesCollected;
+    
+    // Other fees: Only count fees that are enabled and assigned to pupils
+    const otherFeesExpected = otherFees?.reduce((sum, f) => sum + Number(f.total_expected), 0) || 0;
+    const otherFeesCollected = otherFees?.reduce((sum, f) => sum + Number(f.collected), 0) || 0;
+    const otherFeesOutstanding = otherFees?.reduce((sum, f) => sum + Number(f.balance), 0) || 0;
+    
+    // Calculate discounts
+    const totalDiscountAmount = installments?.reduce((sum, i) => {
+      return sum + (Number(i.amount_paid) * Number(i.discount_applied) / 100);
+    }, 0) || 0;
+    
+    const pupilsWithDiscounts = new Set(
+      installments?.filter(i => i.discount_applied > 0).map(i => i.pupil_id)
+    ).size;
+    
+    return {
+      totalPupils,
+      admittedPupils,
+      newPupils,
+      schoolFeesExpected,
+      schoolFeesCollected,
+      schoolFeesOutstanding,
+      otherFeesExpected,
+      otherFeesCollected,
+      otherFeesOutstanding,
+      totalExpected: schoolFeesExpected + otherFeesExpected,
+      totalCollected: schoolFeesCollected + otherFeesCollected,
+      totalOutstanding: schoolFeesOutstanding + otherFeesOutstanding,
+      totalDiscountAmount,
+      pupilsWithDiscounts
+    };
+  } catch (error) {
+    console.error('Error calculating dashboard stats:', error);
+    throw error;
+  }
+};
+
+// Dashboard stats - Now using database view for optimal performance
+export const getDashboardStats = async () => {
+  const { data, error } = await supabase
+    .from("dashboard_stats")
+    .select("*")
+    .single();
+
+  if (error) throw error;
+
+  return data;
+};
+
+// Reports - Now using database views for optimal performance
+export const getOutstandingPerGrade = async () => {
+  const { data, error } = await supabase
+    .from("outstanding_by_grade")
+    .select("*")
+    .order("level_order");
+
+  if (error) throw error;
+  return data || [];
+};
+
+export const getCollectionPerTerm = async () => {
+  const { data, error } = await supabase
+    .from("collection_by_term")
+    .select("*")
+    .order("start_date");
+
+  if (error) throw error;
+  return data || [];
+};
+
+export const getDailyCollection = async () => {
+  const { data, error } = await supabase
+    .from("installments")
+    .select("amount_paid, created_at")
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw error;
+
+  const dayMap: Record<string, { date: string; total: number }> = {};
+  data?.forEach((inst) => {
+    const d = new Date(inst.created_at).toISOString().split("T")[0];
+    if (!dayMap[d]) dayMap[d] = { date: d, total: 0 };
+    dayMap[d].total += Number(inst.amount_paid);
+  });
+  return Object.values(dayMap);
+};
+
+export const getSchoolTotals = async () => {
+  const [schoolFees, otherFees] = await Promise.all([
+    supabase.from("school_fees").select("total_expected, total_collected"),
+    supabase.from("other_fees").select("total_expected, collected")
+  ]);
+
+  const totalExpected = (schoolFees.data?.reduce((sum, f) => sum + Number(f.total_expected), 0) ?? 0);
+  const totalCollected = (schoolFees.data?.reduce((sum, f) => sum + Number(f.total_collected), 0) ?? 0);
+
+  return { totalExpected, totalCollected };
+};
+
+export const getOtherFeesBreakdown = async () => {
+  const { data, error } = await supabase
+    .from('other_fees_breakdown')
+    .select('*');
+
+  if (error) throw error;
+
+  return data || [];
+};
+
+export const getFeeTypeStats = async (feeType?: string) => {
+  try {
+    let query = supabase.from('other_fees').select('total_expected, collected, balance, fee_type');
+    
+    // Only count enabled fees
+    query = query.eq('is_enabled', true);
+    
+    if (feeType && feeType !== 'all') {
+      query = query.eq('fee_type', feeType);
+    }
+    
+    const { data, error } = await query;
+    
+    if (error) throw error;
+    
+    const expected = data?.reduce((sum, f) => sum + Number(f.total_expected), 0) || 0;
+    const collected = data?.reduce((sum, f) => sum + Number(f.collected), 0) || 0;
+    const outstanding = data?.reduce((sum, f) => sum + Number(f.balance), 0) || 0;
+    
+    return {
+      expected,
+      collected,
+      outstanding,
+      feeType: feeType || 'all',
+      count: data?.length || 0
+    };
+  } catch (error) {
+    console.error('Error getting fee type stats:', error);
+    throw error;
+  }
+};
+
+export const getPupilsByFeeType = async (feeType: string) => {
+  const { data, error } = await supabase
+    .from("other_fees")
+    .select("*, pupils(*, grades(*))")
+    .eq("fee_type", feeType)
+    .eq("is_enabled", true)
+    .gt("balance", 0)
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+
+  return data || [];
+};
+
+// Toggle other fee for a pupil
+export const toggleOtherFee = async (
+  pupilId: string,
+  feeType: string,
+  isEnabled: boolean,
+  termId?: string
+) => {
+  try {
+    // Get current term if not provided
+    let currentTermId = termId;
+    if (!currentTermId) {
+      const { data: term } = await supabase
+        .from('terms')
+        .select('id')
+        .eq('is_active', true)
+        .single();
+      currentTermId = term?.id;
+    }
+
+    if (isEnabled) {
+      // Enable fee - create or update record
+      const { data, error } = await supabase
+        .from('other_fees')
+        .upsert({
+          pupil_id: pupilId,
+          term_id: currentTermId,
+          fee_type: feeType,
+          total_expected: getDefaultFeeAmount(feeType),
+          collected: 0,
+          balance: getDefaultFeeAmount(feeType),
+          is_enabled: true,
+          paid_toggle: false
+        }, {
+          onConflict: 'pupil_id,term_id,fee_type'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } else {
+      // Disable fee - update is_enabled to false
+      const { data, error } = await supabase
+        .from('other_fees')
+        .update({ is_enabled: false })
+        .eq('pupil_id', pupilId)
+        .eq('term_id', currentTermId)
+        .eq('fee_type', feeType)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    }
+  } catch (error) {
+    console.error('Error toggling other fee:', error);
+    throw error;
+  }
+};
+
+// Helper function to get default fee amounts
+const getDefaultFeeAmount = (feeType: string): number => {
+  const feeAmounts: Record<string, number> = {
+    'Lunch': 600,
+    'Transport': 400,
+    'Maintenance': 150,
+    'Registration': 200,
+    'Sports': 200,
+    'Library': 270,
+    'PTC': 300
+  };
+  return feeAmounts[feeType] || 0;
+};
+
+export const getDiscountBreakdown = async (): Promise<{ discount_percentage: number; pupils: string[] }[]> => {
+  const { data, error } = await supabase
+    .from("installments")
+    .select("discount_applied, pupils(full_name)")
+    .gt("discount_applied", 0)
+    .order("discount_applied", { ascending: false });
+
+  if (error) throw error;
+
+  // Group by discount_applied
+  const grouped: Record<number, string[]> = {};
+  data?.forEach((item: any) => {
+    const discount = item.discount_applied;
+    const pupilName = item.pupils.full_name;
+    if (!grouped[discount]) grouped[discount] = [];
+    if (!grouped[discount].includes(pupilName)) {
+      grouped[discount].push(pupilName);
+    }
+  });
+
+  return Object.keys(grouped).map((discount) => ({
+    discount_percentage: Number(discount),
+    pupils: grouped[discount],
+  }));
 };

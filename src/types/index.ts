@@ -10,11 +10,10 @@ export interface Grade {
 
 export interface Term {
   id: string;
-  name: string;
-  start_date: string;
-  end_date: string;
+  name: string | null;
+  term_number: number;
+  academic_year_id: number;
   is_active: boolean;
-  created_at: string;
 }
 
 export interface Pupil {
@@ -28,6 +27,21 @@ export interface Pupil {
   admission_blocked: boolean;
   created_at: string;
   grades?: Grade;
+  pupil_discounts?: PupilDiscount[];
+}
+
+export interface PupilDiscount {
+  id: string;
+  pupil_id: string;
+  discount_type: 'percentage' | 'fixed';
+  discount_value: number;
+  applies_to: 'tuition' | 'transport' | 'lunch' | 'all';
+  term_id: string | null;
+  is_active: boolean;
+  reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SchoolFee {
@@ -53,6 +67,8 @@ export interface OtherFee {
   collected: number;
   balance: number;
   paid_toggle: boolean;
+  is_enabled: boolean;
+  is_active: boolean;
   created_at: string;
   terms?: Term;
   pupils?: Pupil;
