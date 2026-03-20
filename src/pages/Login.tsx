@@ -96,7 +96,7 @@ export default function LoginPage() {
       </div>
 
       <div className="relative z-10 min-h-screen flex items-center justify-center p-4 lg:p-8">
-        <div className="w-full max-w-2xl lg:max-w-5xl">
+        <div className="w-full max-w-lg lg:max-w-2xl lg:max-w-5xl">
           {/* Logo Section - Spans Full Width */}
           <motion.div
             initial={{ opacity: 0, y: -30 }}

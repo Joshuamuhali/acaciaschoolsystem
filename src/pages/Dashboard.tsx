@@ -121,7 +121,7 @@ export default function Dashboard() {
         </div>
 
         {/* Stats Cards Skeleton */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           <SkeletonStatsCard />
           <SkeletonStatsCard />
           <SkeletonStatsCard />
@@ -135,7 +135,7 @@ export default function Dashboard() {
         <SkeletonCard />
 
         {/* Quick Actions Skeleton */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           <SkeletonCard />
           <SkeletonCard />
           <SkeletonCard />
@@ -258,7 +258,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-3">
               <div className="text-right">
                 <p className="text-sm text-emerald-100">Logged in as</p>
-                <p className="font-semibold">{user?.name || user?.email || 'User'}</p>
+                <p className="font-semibold">{user?.fullName || user?.email || 'User'}</p>
               </div>
               <Badge className={`${getRoleBadgeColor(user?.role)} text-white border-0`}>
                 {user?.role || 'User'}
@@ -277,7 +277,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Pupils</CardTitle>
@@ -339,7 +339,7 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         <Button onClick={() => navigate('/pupils')} className="h-20 flex-col">
           <Users className="h-6 w-6 mb-2" />
           Manage Pupils

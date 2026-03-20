@@ -135,7 +135,7 @@ export default function Reports() {
           <div className="h-4 w-64 bg-muted rounded animate-pulse" />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 mb-6">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 mb-6">
           <SkeletonStatsCard />
           <SkeletonStatsCard />
         </div>
@@ -153,7 +153,7 @@ export default function Reports() {
         <p className="page-description">Financial reports and statements</p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 mb-6">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 mb-6">
         <div className="stat-card">
           <p className="text-sm text-muted-foreground">Total Expected</p>
           <p className="text-2xl font-bold font-heading text-primary">ZMW {stats.totalExpected.toLocaleString()}</p>
@@ -173,8 +173,8 @@ export default function Reports() {
         </TabsList>
 
         <TabsContent value="grade" className="mt-4">
-          <div className="flex justify-between items-center mb-4">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-2 mb-4">
+            <div className="flex flex-col sm:flex-row items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -211,7 +211,7 @@ export default function Reports() {
               Export CSV
             </Button>
           </div>
-          <div className="rounded-xl border bg-card overflow-hidden">
+          <div className="rounded-xl border bg-card overflow-x-auto">
             <Table>
               <TableHeader><TableRow><TableHead>Grade</TableHead><TableHead>Outstanding</TableHead></TableRow></TableHeader>
               <TableBody>
@@ -231,7 +231,7 @@ export default function Reports() {
               Export CSV
             </Button>
           </div>
-          <div className="rounded-xl border bg-card overflow-hidden">
+          <div className="rounded-xl border bg-card overflow-x-auto">
             <Table>
               <TableHeader><TableRow><TableHead>Term</TableHead><TableHead>Total Collected</TableHead></TableRow></TableHeader>
               <TableBody>
@@ -245,7 +245,7 @@ export default function Reports() {
         </TabsContent>
 
         <TabsContent value="daily" className="mt-4">
-          <div className="rounded-xl border bg-card overflow-hidden">
+          <div className="rounded-xl border bg-card overflow-x-auto">
             <Table>
               <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Total Collected</TableHead></TableRow></TableHeader>
               <TableBody>
@@ -265,7 +265,7 @@ export default function Reports() {
               Export CSV
             </Button>
           </div>
-          <div className="rounded-xl border bg-card overflow-hidden">
+          <div className="rounded-xl border bg-card overflow-x-auto">
             <Table>
               <TableHeader><TableRow><TableHead>Pupil</TableHead><TableHead>Grade</TableHead><TableHead>Total Paid</TableHead><TableHead>Balance</TableHead></TableRow></TableHeader>
               <TableBody>
