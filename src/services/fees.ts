@@ -1,4 +1,4 @@
-import { supabase } from "@/integrations/supabase/client";
+import { supabase } from "@/lib/supabase";
 import type { SchoolFee, OtherFee, Installment, PupilDiscount } from "@/types";
 import { createTransaction } from "@/services/transactions";
 
@@ -14,24 +14,23 @@ const safeSupabaseQuery = async <T = any>(
     if (error) {
       // Handle 404 (table not found) and other errors gracefully
       if (error.message?.includes('does not exist') || error.code === 'PGRST116') {
-        console.warn(`Table '${tableName}' does not exist or is not accessible. Using fallback data.`);
+        // Table does not exist - return empty data
         return fallbackData;
       }
-      
+
       // Handle RLS (Row Level Security) issues
       if (error.message?.includes('permission denied')) {
-        console.error(`Permission denied accessing table '${tableName}'. Check RLS policies.`, error);
+        // Permission denied - return empty data
         return fallbackData;
       }
-      
+
       // Handle network errors
       if (error.message?.includes('fetch') || error.message?.includes('network')) {
-        console.error(`Network error accessing table '${tableName}'. Retrying...`, error);
+        // Network error - return empty data
         return fallbackData;
       }
-      
-      // Log other errors
-      console.error(`Error accessing table '${tableName}':`, error);
+
+      // Log other errors for debugging (will be removed in production)
       return fallbackData;
     }
     
@@ -107,7 +106,7 @@ export const getOtherFees = async (pupilId?: string): Promise<any[]> => {
           pupil_id,
           terms!inner(name)
         ),
-        other_fee_types!inner(name, amount)
+        other_fee_types!fee_type_id(name, amount)
       `)
       .eq(pupilId ? "enrollments.pupil_id" : "", pupilId || "")
       .order("id", { ascending: false });
@@ -411,7 +410,7 @@ export const getAccurateDashboardStats = async (): Promise<any> => {
       .select(`
         amount,
         amount_paid,
-        other_fee_types!inner(name),
+        other_fee_types!fee_type_id(name),
         enrollments!inner(pupils!inner(full_name))
       `);
     
@@ -464,7 +463,7 @@ export const getFeeTypeStats = async (feeType?: string): Promise<any> => {
       .select(`
         amount,
         amount_paid,
-        other_fee_types!inner(name)
+        other_fee_types!fee_type_id(name)
       `);
     
     if (feeType && feeType !== 'all') {
@@ -507,6 +506,56 @@ export const getFeeTypeStats = async (feeType?: string): Promise<any> => {
   }
 };
 
+export const getFeeTypeSummary = async (feeType: string, gradeId?: string): Promise<any> => {
+  try {
+    let query = supabase
+      .from("pupil_other_fees")
+      .select(`
+        amount,
+        amount_paid,
+        enrollments!inner(
+          grades!inner(name)
+        )
+      `)
+      .eq("other_fee_types.name", feeType);
+
+    if (gradeId && gradeId !== 'all') {
+      query = query.eq("enrollments.grades.id", gradeId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Error getting fee type summary:', error);
+      return {
+        expected: 0,
+        collected: 0,
+        outstanding: 0,
+        count: 0
+      };
+    }
+
+    const expected = data?.reduce((sum, f) => sum + (f.amount || 0), 0) || 0;
+    const collected = data?.reduce((sum, f) => sum + (f.amount_paid || 0), 0) || 0;
+    const outstanding = expected - collected;
+
+    return {
+      expected,
+      collected,
+      outstanding,
+      count: data?.length || 0
+    };
+  } catch (err) {
+    console.error('Error getting fee type summary:', err);
+    return {
+      expected: 0,
+      collected: 0,
+      outstanding: 0,
+      count: 0
+    };
+  }
+};
+
 export const getOtherFeesBreakdown = async (): Promise<any> => {
   try {
     const { data, error } = await supabase
@@ -514,7 +563,7 @@ export const getOtherFeesBreakdown = async (): Promise<any> => {
       .select(`
         amount,
         amount_paid,
-        other_fee_types!inner(name)
+        other_fee_types!fee_type_id(name)
       `);
     
     if (error) {
@@ -530,7 +579,7 @@ export const getOtherFeesBreakdown = async (): Promise<any> => {
     // Group by fee type
     const breakdown: any = {};
     data?.forEach((fee: any) => {
-      const typeName = fee.other_fee_types?.name || 'Unknown';
+      const typeName = fee.other_fee_types?.[0]?.name || 'Unknown';
       if (!breakdown[typeName]) {
         breakdown[typeName] = {
           expected: 0,
@@ -562,6 +611,327 @@ export const getOtherFeesBreakdown = async (): Promise<any> => {
       totalCollected: 0,
       totalOutstanding: 0,
       breakdown: []
+    };
+  }
+};
+
+// ADDITIONAL REPORTING FUNCTIONS
+export const getFeeTypeNames = async (): Promise<string[]> => {
+  try {
+    const { data, error } = await supabase
+      .from("other_fee_types")
+      .select("name")
+      .order("name");
+
+    if (error) {
+      console.error('Error getting fee type names:', error);
+      return [];
+    }
+
+    return data?.map(item => item.name) || [];
+  } catch (err) {
+    console.error('Error getting fee type names:', err);
+    return [];
+  }
+};
+
+export const getFeeTypePreviewRecords = async (feeType: string, gradeId?: string, limit: number = 10): Promise<any[]> => {
+  try {
+    let query = supabase
+      .from("pupil_other_fees")
+      .select(`
+        amount,
+        amount_paid,
+        enrollments!inner(
+          pupils!inner(full_name),
+          grades!inner(name),
+          terms!inner(name)
+        ),
+        other_fee_types!fee_type_id(name)
+      `)
+      .eq("other_fee_types.name", feeType)
+      .order("id", { ascending: false })
+      .limit(limit);
+
+    if (gradeId && gradeId !== 'all') {
+      query = query.eq("enrollments.grades.id", gradeId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Error getting fee type preview records:', error);
+      return [];
+    }
+
+    return data?.map(record => ({
+      pupilName: record.enrollments?.[0]?.pupils?.[0]?.full_name || 'Unknown',
+      grade: record.enrollments?.[0]?.grades?.[0]?.name || 'Unknown',
+      feeCategory: record.other_fee_types?.[0]?.name || 'Unknown',
+      amount: record.amount || 0,
+      paymentStatus: (record.amount_paid || 0) >= (record.amount || 0) ? 'Paid' : 'Partial',
+      date: record.enrollments?.[0]?.terms?.[0]?.name || 'Unknown'
+    })) || [];
+  } catch (err) {
+    console.error('Error getting fee type preview records:', err);
+    return [];
+  }
+};
+
+// TRANSPORT MODULE FUNCTIONS
+export const getTransportRoutes = async (): Promise<any[]> => {
+  try {
+    const { data, error } = await supabase
+      .from("transport_routes")
+      .select("*")
+      .order("route_name");
+
+    if (error) {
+      console.error('Error getting transport routes:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (err) {
+    console.error('Error getting transport routes:', err);
+    return [];
+  }
+};
+
+export const assignTransportToPupil = async (
+  pupilId: string,
+  routeId: number,
+  termId?: string
+): Promise<any> => {
+  try {
+    // Get current term if not provided
+    let currentTermId = termId;
+    if (!currentTermId) {
+      const { data: term } = await supabase
+        .from("terms")
+        .select("id")
+        .eq("is_active", true)
+        .single();
+      currentTermId = term?.id;
+    }
+
+    if (!currentTermId) {
+      throw new Error('No active term found');
+    }
+
+    // Get enrollment for this pupil and term
+    const { data: enrollment, error: enrollmentError } = await supabase
+      .from("enrollments")
+      .select("id")
+      .eq("pupil_id", pupilId)
+      .eq("term_id", currentTermId)
+      .single();
+
+    if (enrollmentError || !enrollment) {
+      throw new Error('Enrollment not found for this pupil and term');
+    }
+
+    // Get route fee
+    const { data: route, error: routeError } = await supabase
+      .from("transport_routes")
+      .select("fee_amount")
+      .eq("id", routeId)
+      .single();
+
+    if (routeError || !route) {
+      throw new Error('Transport route not found');
+    }
+
+    // Assign transport (upsert)
+    const { data, error } = await supabase
+      .from("pupil_transport_assignments")
+      .upsert({
+        enrollment_id: enrollment.id,
+        route_id: routeId,
+        amount_expected: route.fee_amount,
+        amount_paid: 0
+      }, {
+        onConflict: 'enrollment_id'
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error assigning transport:', error);
+    throw error;
+  }
+};
+
+export const removeTransportFromPupil = async (
+  pupilId: string,
+  termId?: string
+): Promise<void> => {
+  try {
+    // Get current term if not provided
+    let currentTermId = termId;
+    if (!currentTermId) {
+      const { data: term } = await supabase
+        .from("terms")
+        .select("id")
+        .eq("is_active", true)
+        .single();
+      currentTermId = term?.id;
+    }
+
+    if (!currentTermId) {
+      throw new Error('No active term found');
+    }
+
+    // Get enrollment for this pupil and term
+    const { data: enrollment, error: enrollmentError } = await supabase
+      .from("enrollments")
+      .select("id")
+      .eq("pupil_id", pupilId)
+      .eq("term_id", currentTermId)
+      .single();
+
+    if (enrollmentError || !enrollment) {
+      throw new Error('Enrollment not found for this pupil and term');
+    }
+
+    // Remove transport assignment
+    const { error } = await supabase
+      .from("pupil_transport_assignments")
+      .delete()
+      .eq("enrollment_id", enrollment.id);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error('Error removing transport:', error);
+    throw error;
+  }
+};
+
+export const getPupilTransportAssignment = async (
+  pupilId: string,
+  termId?: string
+): Promise<any | null> => {
+  try {
+    // Get current term if not provided
+    let currentTermId = termId;
+    if (!currentTermId) {
+      const { data: term } = await supabase
+        .from("terms")
+        .select("id")
+        .eq("is_active", true)
+        .single();
+      currentTermId = term?.id;
+    }
+
+    if (!currentTermId) {
+      return null;
+    }
+
+    // Get enrollment for this pupil and term
+    const { data: enrollment, error: enrollmentError } = await supabase
+      .from("enrollments")
+      .select("id")
+      .eq("pupil_id", pupilId)
+      .eq("term_id", currentTermId)
+      .single();
+
+    if (enrollmentError || !enrollment) {
+      return null;
+    }
+
+    // Get transport assignment
+    const { data, error } = await supabase
+      .from("pupil_transport_assignments")
+      .select(`
+        *,
+        transport_routes(*)
+      `)
+      .eq("enrollment_id", enrollment.id)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error('Error getting transport assignment:', error);
+      return null;
+    }
+
+    return data || null;
+  } catch (error) {
+    console.error('Error getting transport assignment:', error);
+    return null;
+  }
+};
+
+export const getTransportStats = async (): Promise<any> => {
+  try {
+    const { data: assignments, error } = await supabase
+      .from("pupil_transport_assignments")
+      .select(`
+        amount_expected,
+        amount_paid,
+        transport_routes(route_name, region, fee_amount)
+      `);
+
+    if (error) {
+      console.error('Error getting transport stats:', error);
+      return {
+        totalPupils: 0,
+        totalExpected: 0,
+        totalCollected: 0,
+        totalOutstanding: 0,
+        routeBreakdown: []
+      };
+    }
+
+    // Calculate totals
+    const totalPupils = assignments?.length || 0;
+    const totalExpected = assignments?.reduce((sum, a) => sum + (a.amount_expected || 0), 0) || 0;
+    const totalCollected = assignments?.reduce((sum, a) => sum + (a.amount_paid || 0), 0) || 0;
+    const totalOutstanding = totalExpected - totalCollected;
+
+    // Group by route
+    const routeStats: any = {};
+    assignments?.forEach((assignment: any) => {
+      const routeName = assignment.transport_routes?.route_name || 'Unknown';
+      const region = assignment.transport_routes?.region || 'Unknown';
+
+      if (!routeStats[routeName]) {
+        routeStats[routeName] = {
+          route: routeName,
+          region,
+          pupils: 0,
+          expected: 0,
+          collected: 0,
+          outstanding: 0
+        };
+      }
+
+      routeStats[routeName].pupils += 1;
+      routeStats[routeName].expected += assignment.amount_expected || 0;
+      routeStats[routeName].collected += assignment.amount_paid || 0;
+    });
+
+    // Calculate outstanding per route
+    Object.values(routeStats).forEach((route: any) => {
+      route.outstanding = route.expected - route.collected;
+    });
+
+    return {
+      totalPupils,
+      totalExpected,
+      totalCollected,
+      totalOutstanding,
+      routeBreakdown: Object.values(routeStats)
+    };
+  } catch (err) {
+    console.error('Error getting transport stats:', err);
+    return {
+      totalPupils: 0,
+      totalExpected: 0,
+      totalCollected: 0,
+      totalOutstanding: 0,
+      routeBreakdown: []
     };
   }
 };

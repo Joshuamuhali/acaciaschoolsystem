@@ -1,4 +1,4 @@
-import { supabase } from "@/integrations/supabase/client";
+import { supabase } from "@/lib/supabase";
 import type { FeeDefault } from "@/types";
 
 export const getFeeDefaults = async (): Promise<FeeDefault[]> => {

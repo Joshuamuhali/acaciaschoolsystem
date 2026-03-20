@@ -1,700 +1,478 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { 
-  Shield, Users, Database, Settings, Download, Trash2, AlertTriangle, 
-  CheckCircle, Clock, Activity, Power, Zap, RefreshCw, UserX, LogOut,
-  TestTube, FileText, Server, TriangleAlert, Ban, RotateCcw, Calculator,
-  TrendingUp, UserCheck, Lock, Unlock, Eye, EyeOff, DatabaseBackup,
-  HardDrive, ShieldAlert, Terminal, GitBranch, Layers,
-  DollarSign, CreditCard, Receipt, FileSpreadsheet, BarChart3, CalendarDays
-} from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Users, Shield, Plus, Edit, Trash2, Key, Mail, UserCheck, UserX, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { supabase } from "@/integrations/supabase/client";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useRole } from "@/hooks/useRole";
+import { useUserContext } from "@/contexts/UserContext";
+import { systemAdminService, type SystemUser, type UserRole } from "@/services/systemAdmin";
 
 export default function SystemAdmin() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { hasAnyRole } = useRole();
+  const { user } = useUserContext();
   
-  // System Overview State
-  const [systemStats, setSystemStats] = useState({
-    totalPupils: 0,
-    totalCollected: 0,
-    totalOutstanding: 0,
-    activeTerm: "Term 1 2024",
-    systemStatus: "Operational",
-    lastBackup: new Date().toISOString()
-  });
-
-  // System Controls State
-  const [systemControls, setSystemControls] = useState({
-    maintenanceMode: false,
-    realTimeSubscriptions: true,
-    automaticBalanceRecalc: true,
-    paymentEditLogging: true,
-    systemLogging: true,
-    discountSystem: true
-  });
-
-  // Database Tools State
-  const [tableCounts, setTableCounts] = useState({
-    pupils: 0,
-    grades: 0,
-    terms: 0,
-    school_fees: 0,
-    other_fees: 0,
-    installments: 0,
-    transactions: 0
-  });
-
-  // Identity Control State
-  const [identityData, setIdentityData] = useState({
-    totalUsers: 0,
-    adminUsers: 3,
-    recentLogins: [
-      { id: 1, user: "Admin", time: "2 mins ago", ip: "192.168.1.1" },
-      { id: 2, user: "Teacher", time: "15 mins ago", ip: "192.168.1.2" },
-      { id: 3, user: "Staff", time: "1 hour ago", ip: "192.168.1.3" }
-    ]
-  });
-
-  // Dialog States
-  const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; action: string; title: string; description: string }>({
-    open: false,
-    action: "",
-    title: "",
-    description: ""
-  });
-  const [confirmText, setConfirmText] = useState("");
+  const [activeTab, setActiveTab] = useState<'users' | 'roles'>('users');
   const [loading, setLoading] = useState(false);
+  const [users, setUsers] = useState<SystemUser[]>([]);
+  const [roles, setRoles] = useState<UserRole[]>([]);
+  const [showCreateUser, setShowCreateUser] = useState(false);
+  const [showCreateRole, setShowCreateRole] = useState(false);
+  const [editingUser, setEditingUser] = useState<SystemUser | null>(null);
+  const [editingRole, setEditingRole] = useState<UserRole | null>(null);
+
+  // User form state
+  const [userForm, setUserForm] = useState({
+    email: "",
+    full_name: "",
+    role: "",
+    school_id: 1
+  });
+
+  // Role form state
+  const [roleForm, setRoleForm] = useState({
+    role: "",
+    description: "",
+    is_active: true
+  });
 
   useEffect(() => {
-    loadSystemData();
-  }, []);
+    if (!hasAnyRole(['system_admin'])) {
+      navigate('/');
+      return;
+    }
+    loadUsers();
+    loadRoles();
+  }, [hasAnyRole, navigate]);
 
-  const loadSystemData = async () => {
+  const loadUsers = async () => {
     try {
-      // Get actual pupil count
-      const { count: pupilCount } = await supabase
-        .from('pupils')
-        .select('*', { count: 'exact', head: true });
-
-      // Get actual grades count
-      const { count: gradeCount } = await supabase
-        .from('grades')
-        .select('*', { count: 'exact', head: true });
-
-      // Get actual terms count
-      const { count: termCount } = await supabase
-        .from('terms')
-        .select('*', { count: 'exact', head: true });
-
-      // Get actual school fees count
-      const { count: schoolFeesCount } = await supabase
-        .from('school_fees')
-        .select('*', { count: 'exact', head: true });
-
-      // Get actual other fees count
-      const { count: otherFeesCount } = await supabase
-        .from('other_fees')
-        .select('*', { count: 'exact', head: true });
-
-      // Get actual installments count
-      const { count: installmentsCount } = await supabase
-        .from('installments')
-        .select('*', { count: 'exact', head: true });
-
-      // Get actual transactions count
-      const { count: transactionsCount } = await supabase
-        .from('transactions')
-        .select('*', { count: 'exact', head: true });
-
-      // Get active term
-      const { data: activeTerm } = await supabase
-        .from('terms')
-        .select('name')
-        .eq('is_active', true)
-        .single();
-
-      // Calculate actual financial data from dashboard_stats view
-      const { data: dashboardStats } = await supabase
-        .from('dashboard_stats')
-        .select('*')
-        .single();
-
-      setSystemStats({
-        totalPupils: pupilCount || 0,
-        totalCollected: dashboardStats?.total_collected || 0,
-        totalOutstanding: dashboardStats?.total_outstanding || 0,
-        activeTerm: activeTerm?.name || "No Active Term",
-        systemStatus: systemControls.maintenanceMode ? "Maintenance" : "Operational",
-        lastBackup: new Date().toISOString()
-      });
-
-      // Update table counts with real data
-      setTableCounts({
-        pupils: pupilCount || 0,
-        grades: gradeCount || 0,
-        terms: termCount || 0,
-        school_fees: schoolFeesCount || 0,
-        other_fees: otherFeesCount || 0,
-        installments: installmentsCount || 0,
-        transactions: transactionsCount || 0
-      });
-
-      // Update identity data with real user count
-      setIdentityData(prev => ({
-        ...prev,
-        totalUsers: pupilCount || 0
-      }));
-
-    } catch (error) {
-      console.error('Error loading system data:', error);
+      const data = await systemAdminService.getProfiles();
+      setUsers(data);
+    } catch (error: any) {
       toast({
-        title: "Error Loading Data",
-        description: "Failed to load system statistics from database",
-        variant: "destructive"
+        title: "Error loading users",
+        description: error.message,
+        variant: "destructive",
       });
     }
   };
 
-  const handleSystemControlToggle = (key: keyof typeof systemControls) => {
-    setSystemControls(prev => ({
-      ...prev,
-      [key]: !prev[key]
-    }));
-    
-    toast({
-      title: "System Control Updated",
-      description: `${key.replace(/([A-Z])/g, ' $1').trim()} ${!systemControls[key] ? 'enabled' : 'disabled'}`,
-    });
-
-    // Update system status if maintenance mode changes
-    if (key === 'maintenanceMode') {
-      setSystemStats(prev => ({
-        ...prev,
-        systemStatus: !systemControls.maintenanceMode ? "Maintenance" : "Operational"
-      }));
+  const loadRoles = async () => {
+    try {
+      const data = await systemAdminService.getRoles();
+      
+      // Count users per role
+      const rolesWithCounts = await Promise.all(
+        data.map(async (role) => {
+          // For now, use a placeholder count
+          return {
+            ...role,
+            id: 0, // Temporary ID for display
+            user_count: 0
+          };
+        })
+      );
+      
+      setRoles(rolesWithCounts);
+    } catch (error: any) {
+      toast({
+        title: "Error loading roles",
+        description: error.message,
+        variant: "destructive",
+      });
     }
   };
 
-  const handleFinancialAction = (action: string) => {
-    setConfirmDialog({
-      open: true,
-      action,
-      title: `Confirm ${action}`,
-      description: `This will ${action.toLowerCase()} for all records. This action cannot be undone.`
-    });
-  };
+  const handleCreateUser = async () => {
+    if (!userForm.email || !userForm.full_name || !userForm.role) {
+      toast({
+        title: "Missing Information",
+        description: "Please fill in all required fields.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-  const handleDangerousAction = (action: string) => {
-    setConfirmDialog({
-      open: true,
-      action,
-      title: `⚠️ DANGEROUS: ${action}`,
-      description: `This is a destructive action that will ${action.toLowerCase()}. Type CONFIRM to proceed.`
-    });
-  };
-
-  const executeAction = async () => {
     setLoading(true);
-    
     try {
-      switch (confirmDialog.action) {
-        case "Recalculate All Pupil Balances":
-          // Update all school fees balances
-          const { data: schoolFees } = await supabase.from('school_fees').select('id, total_amount, total_collected');
-          if (schoolFees) {
-            for (const fee of schoolFees) {
-              const balance = Number(fee.total_amount) - Number(fee.total_collected);
-              await supabase
-                .from('school_fees')
-                .update({ balance, paid_toggle: balance <= 0 })
-                .eq('id', fee.id);
-            }
-          }
-          
-          // Update all other fees balances
-          const { data: otherFees } = await supabase.from('other_fees').select('id, amount, collected');
-          if (otherFees) {
-            for (const fee of otherFees) {
-              const balance = Number(fee.amount) - Number(fee.collected);
-              await supabase
-                .from('other_fees')
-                .update({ balance, paid_toggle: balance <= 0 })
-                .eq('id', fee.id);
-            }
-          }
-          break;
-
-        case "Rebuild Dashboard Statistics":
-          // Refresh the dashboard_stats materialized view
-          await supabase.rpc('refresh_dashboard_stats');
-          break;
-
-        case "Recompute Term Analytics":
-          // Recalculate term-based analytics
-          const { data: terms } = await supabase.from('terms').select('*');
-          if (terms) {
-            for (const term of terms) {
-              // Recalculate term statistics here
-              console.log(`Recomputing analytics for term: ${term.name}`);
-            }
-          }
-          break;
-
-        case "Reset All Discounts":
-          // Set all discounts to 0
-          await supabase.from('installments').update({ discount_applied: 0 });
-          break;
-
-        case "Normalize Installments":
-          // Fix any inconsistent installment data
-          await supabase.rpc('normalize_installments');
-          break;
-
-        default:
-          // Simulate other actions
-          await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-      
-      toast({
-        title: "Action Completed",
-        description: `${confirmDialog.action} completed successfully`,
+      // Create user profile
+      const profile = await systemAdminService.createProfile({
+        email: userForm.email,
+        full_name: userForm.full_name,
+        school_id: userForm.school_id,
+        is_active: true
       });
-      
-      // Reload data to show updated values
-      await loadSystemData();
-      
-    } catch (error) {
-      console.error('Error executing action:', error);
+
+      // Assign role
+      await systemAdminService.assignRole({
+        user_id: profile.id,
+        role: userForm.role,
+        school_id: userForm.school_id,
+        is_active: true
+      });
+
       toast({
-        title: "Action Failed",
-        description: `Failed to execute ${confirmDialog.action}: ${error.message}`,
-        variant: "destructive"
+        title: "User Created",
+        description: `User ${userForm.full_name} has been created successfully.`,
+      });
+
+      setShowCreateUser(false);
+      setUserForm({ email: "", full_name: "", role: "", school_id: 1 });
+      loadUsers();
+      loadRoles();
+    } catch (error: any) {
+      toast({
+        title: "Error creating user",
+        description: error.message,
+        variant: "destructive",
       });
     } finally {
-      setConfirmDialog({ open: false, action: "", title: "", description: "" });
-      setConfirmText("");
       setLoading(false);
     }
   };
 
-  const canExecuteDangerousAction = confirmText === "CONFIRM";
+  const handleCreateRole = async () => {
+    if (!roleForm.role || !roleForm.description) {
+      toast({
+        title: "Missing Information",
+        description: "Please fill in all required fields.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await systemAdminService.createRole({
+        role: roleForm.role,
+        description: roleForm.description,
+        school_id: 1,
+        is_active: roleForm.is_active
+      });
+
+      toast({
+        title: "Role Created",
+        description: `Role ${roleForm.role} has been created successfully.`,
+      });
+
+      setShowCreateRole(false);
+      setRoleForm({ role: "", description: "", is_active: true });
+      loadRoles();
+    } catch (error: any) {
+      toast({
+        title: "Error creating role",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleUserStatus = async (user: SystemUser) => {
+    try {
+      await systemAdminService.updateProfileStatus(user.id, !user.is_active);
+
+      toast({
+        title: "User Status Updated",
+        description: `User has been ${user.is_active ? 'deactivated' : 'activated'}.`,
+      });
+
+      loadUsers();
+    } catch (error: any) {
+      toast({
+        title: "Error updating user",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDeleteUser = async (user: SystemUser) => {
+    if (!confirm(`Are you sure you want to delete ${user.full_name}? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await systemAdminService.deleteProfile(user.id);
+
+      toast({
+        title: "User Deleted",
+        description: `User ${user.full_name} has been deleted.`,
+      });
+
+      loadUsers();
+      loadRoles();
+    } catch (error: any) {
+      toast({
+        title: "Error deleting user",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const getRoleBadgeVariant = (role: string) => {
+    switch (role) {
+      case 'system_admin':
+        return 'destructive';
+      case 'school_admin':
+        return 'default';
+      case 'director':
+        return 'secondary';
+      case 'principal':
+        return 'outline';
+      default:
+        return 'secondary';
+    }
+  };
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold font-heading text-primary">System Admin Control Center</h1>
+          <h1 className="text-3xl font-bold">System Administration</h1>
+          <p className="text-muted-foreground">Manage users and roles</p>
         </div>
-        <Badge variant={systemStats.systemStatus === "Operational" ? "default" : "destructive"} className="flex items-center gap-2">
-          <Activity className="h-4 w-4" />
-          {systemStats.systemStatus}
-        </Badge>
       </div>
 
-      <Tabs defaultValue="overview" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-6">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="controls">System Controls</TabsTrigger>
-          <TabsTrigger value="financial">Financial Engine</TabsTrigger>
-          <TabsTrigger value="identity">Identity Control</TabsTrigger>
-          <TabsTrigger value="database">Database Tools</TabsTrigger>
-          <TabsTrigger value="danger">Danger Zone</TabsTrigger>
-        </TabsList>
+      {/* Tab Navigation */}
+      <div className="flex space-x-1 bg-muted p-1 rounded-lg w-fit">
+        <Button
+          variant={activeTab === 'users' ? 'default' : 'ghost'}
+          size="sm"
+          onClick={() => setActiveTab('users')}
+          className="flex items-center gap-2"
+        >
+          <Users className="h-4 w-4" />
+          Users
+        </Button>
+        <Button
+          variant={activeTab === 'roles' ? 'default' : 'ghost'}
+          size="sm"
+          onClick={() => setActiveTab('roles')}
+          className="flex items-center gap-2"
+        >
+          <Shield className="h-4 w-4" />
+          Roles
+        </Button>
+      </div>
 
-        {/* 1️⃣ OVERVIEW TAB */}
-        <TabsContent value="overview" className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Pupils</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{systemStats.totalPupils}</div>
-                <p className="text-xs text-muted-foreground">Registered students</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Collected</CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">ZMW {systemStats.totalCollected.toLocaleString()}</div>
-                <p className="text-xs text-muted-foreground">All fees collected</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Outstanding</CardTitle>
-                <AlertTriangle className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-red-600">ZMW {systemStats.totalOutstanding.toLocaleString()}</div>
-                <p className="text-xs text-muted-foreground">Outstanding balances</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Active Term</CardTitle>
-                <CalendarDays className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{systemStats.activeTerm}</div>
-                <p className="text-xs text-muted-foreground">Current academic term</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">System Status</CardTitle>
-                <Activity className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{systemStats.systemStatus}</div>
-                <p className="text-xs text-muted-foreground">Current system state</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Last Backup</CardTitle>
-                <DatabaseBackup className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-sm font-bold">
-                  {new Date(systemStats.lastBackup).toLocaleDateString()}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {new Date(systemStats.lastBackup).toLocaleTimeString()}
-                </p>
-              </CardContent>
-            </Card>
+      {activeTab === 'users' && (
+        <div className="space-y-6">
+          {/* Users Header */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold">User Management</h2>
+            <Button onClick={() => setShowCreateUser(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create User
+            </Button>
           </div>
-        </TabsContent>
 
-        {/* 2️⃣ SYSTEM CONTROLS TAB */}
-        <TabsContent value="controls" className="space-y-6">
+          {/* Users List */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Settings className="h-5 w-5" />
-                System Controls
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {Object.entries({
-                maintenanceMode: { label: "Maintenance Mode", icon: Power, description: "Put system in maintenance mode" },
-                realTimeSubscriptions: { label: "Real-time Subscriptions", icon: Zap, description: "Enable live data updates" },
-                automaticBalanceRecalc: { label: "Automatic Balance Recalculation", icon: Calculator, description: "Auto-calculate balances on changes" },
-                paymentEditLogging: { label: "Payment Edit Logging", icon: FileText, description: "Log all payment modifications" },
-                systemLogging: { label: "System Logging", icon: Activity, description: "Enable comprehensive system logging" },
-                discountSystem: { label: "Discount System", icon: CreditCard, description: "Enable discount functionality" }
-              }).map(([key, config]) => {
-                const Icon = config.icon;
-                const isEnabled = systemControls[key as keyof typeof systemControls];
-                
-                return (
-                  <div key={key} className="flex items-center justify-between p-4 rounded-lg border">
-                    <div className="flex items-center gap-3">
-                      <Icon className={`h-5 w-5 ${isEnabled ? 'text-green-600' : 'text-muted-foreground'}`} />
-                      <div>
-                        <div className="font-medium">{config.label}</div>
-                        <div className="text-sm text-muted-foreground">{config.description}</div>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={isEnabled}
-                      onCheckedChange={() => handleSystemControlToggle(key as keyof typeof systemControls)}
-                    />
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* 3️⃣ FINANCIAL ENGINE TAB */}
-        <TabsContent value="financial" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calculator className="h-5 w-5" />
-                Financial Engine Controls
-              </CardTitle>
+              <CardTitle>All Users</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-4 md:grid-cols-2">
-                {[
-                  { action: "Recalculate All Pupil Balances", icon: RefreshCw, color: "blue" },
-                  { action: "Rebuild Dashboard Statistics", icon: BarChart3, color: "green" },
-                  { action: "Recompute Term Analytics", icon: TrendingUp, color: "purple" },
-                  { action: "Reset All Discounts", icon: CreditCard, color: "orange" },
-                  { action: "Normalize Installments", icon: Layers, color: "cyan" }
-                ].map(({ action, icon: Icon, color }) => (
-                  <Button
-                    key={action}
-                    onClick={() => handleFinancialAction(action)}
-                    variant="outline"
-                    className="h-20 flex-col gap-2"
-                  >
-                    <Icon className={`h-6 w-6 text-${color}-600`} />
-                    <span className="text-sm text-center">{action}</span>
-                  </Button>
+              <div className="space-y-4">
+                {users.map((user) => (
+                  <div key={user.id} className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-muted rounded-full flex items-center justify-center">
+                          <Users className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <p className="font-medium">{user.full_name}</p>
+                          <p className="text-sm text-muted-foreground">{user.email}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant={getRoleBadgeVariant(user.user_roles[0]?.role)}>
+                              {user.user_roles[0]?.role?.replace('_', ' ').toUpperCase() || 'No Role'}
+                            </Badge>
+                            <span className="text-sm text-muted-foreground">
+                              {user.school_name}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleToggleUserStatus(user)}
+                      >
+                        {user.is_active ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDeleteUser(user)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
                 ))}
               </div>
             </CardContent>
           </Card>
-        </TabsContent>
+        </div>
+      )}
 
-        {/* 4️⃣ IDENTITY CONTROL TAB */}
-        <TabsContent value="identity" className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="h-5 w-5" />
-                  User Statistics
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <span>Total Users</span>
-                  <Badge variant="secondary">{identityData.totalUsers}</Badge>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span>Admin Users</span>
-                  <Badge variant="default">{identityData.adminUsers}</Badge>
-                </div>
-                <div className="pt-4 space-y-2">
-                  <Button className="w-full justify-start" variant="outline">
-                    <UserCheck className="h-4 w-4 mr-2" />
-                    Promote User to Admin
-                  </Button>
-                  <Button className="w-full justify-start" variant="outline">
-                    <UserX className="h-4 w-4 mr-2" />
-                    Remove Admin
-                  </Button>
-                  <Button className="w-full justify-start" variant="outline">
-                    <LogOut className="h-4 w-4 mr-2" />
-                    Force Logout User
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Clock className="h-5 w-5" />
-                  Recent Logins
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {identityData.recentLogins.map((login) => (
-                    <div key={login.id} className="flex items-center justify-between p-2 rounded border">
-                      <div>
-                        <div className="font-medium">{login.user}</div>
-                        <div className="text-xs text-muted-foreground">{login.ip}</div>
-                      </div>
-                      <div className="text-xs text-muted-foreground">{login.time}</div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+      {activeTab === 'roles' && (
+        <div className="space-y-6">
+          {/* Roles Header */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold">Role Management</h2>
+            <Button onClick={() => setShowCreateRole(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create Role
+            </Button>
           </div>
-        </TabsContent>
 
-        {/* 5️⃣ DATABASE TOOLS TAB */}
-        <TabsContent value="database" className="space-y-6">
+          {/* Roles List */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Database className="h-5 w-5" />
-                Database Tools
-              </CardTitle>
+              <CardTitle>All Roles</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-2">
-                <Button 
-                  onClick={async () => {
-                    try {
-                      const { data, error } = await supabase.from('grades').select('count').single();
-                      if (error) throw error;
-                      toast({ 
-                        title: "Connection Test", 
-                        description: "Database connection successful" 
-                      });
-                    } catch (error) {
-                      toast({ 
-                        title: "Connection Failed", 
-                        description: error.message,
-                        variant: "destructive"
-                      });
-                    }
-                  }} 
-                  className="justify-start"
-                >
-                  <TestTube className="h-4 w-4 mr-2" />
-                  Test Database Connection
-                </Button>
-                <Button 
-                  onClick={async () => {
-                    try {
-                      // Create a backup record
-                      const { error } = await supabase
-                        .from('payment_log')
-                        .insert({
-                          action: 'system_backup',
-                          details: `Manual backup triggered at ${new Date().toISOString()}`,
-                          created_at: new Date().toISOString()
-                        });
-                      
-                      if (error) throw error;
-                      
-                      toast({ 
-                        title: "Backup Triggered", 
-                        description: "System backup initiated successfully" 
-                      });
-                      
-                      // Update last backup time
-                      setSystemStats(prev => ({
-                        ...prev,
-                        lastBackup: new Date().toISOString()
-                      }));
-                    } catch (error) {
-                      toast({ 
-                        title: "Backup Failed", 
-                        description: error.message,
-                        variant: "destructive"
-                      });
-                    }
-                  }} 
-                  className="justify-start"
-                >
-                  <DatabaseBackup className="h-4 w-4 mr-2" />
-                  Trigger Backup
-                </Button>
-              </div>
-
-              <div>
-                <h4 className="font-medium mb-3">Table Counts</h4>
-                <div className="grid gap-2 text-sm">
-                  {Object.entries(tableCounts).map(([table, count]) => (
-                    <div key={table} className="flex justify-between p-2 rounded border">
-                      <span className="capitalize">{table.replace(/_/g, ' ')}</span>
-                      <Badge variant="outline">{count}</Badge>
+            <CardContent>
+              <div className="space-y-4">
+                {roles.map((role) => (
+                  <div key={role.role} className="flex items-center justify-between p-4 border rounded-lg">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-muted rounded-full flex items-center justify-center">
+                          <Shield className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <p className="font-medium">{role.role.replace('_', ' ').toUpperCase()}</p>
+                          <p className="text-sm text-muted-foreground">{role.description}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant={role.is_active ? 'default' : 'destructive'}>
+                              {role.is_active ? 'Active' : 'Inactive'}
+                            </Badge>
+                            <span className="text-sm text-muted-foreground">
+                              {role.user_count} user{role.user_count !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  ))}
-                </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm">
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>
-        </TabsContent>
+        </div>
+      )}
 
-        {/* 6️⃣ DANGER ZONE TAB */}
-        <TabsContent value="danger" className="space-y-6">
-          <Alert className="border-red-500 bg-red-50 dark:bg-red-950/20">
-            <TriangleAlert className="h-4 w-4" />
-            <AlertTitle className="text-red-700 dark:text-red-300">⚠️ DANGER ZONE</AlertTitle>
-            <AlertDescription className="text-red-600 dark:text-red-400">
-              These actions are destructive and cannot be undone. Proceed with extreme caution.
-            </AlertDescription>
-          </Alert>
-
-          <Card className="border-red-200">
+      {/* Create User Modal */}
+      {showCreateUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-md">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-red-600">
-                <Ban className="h-5 w-5" />
-                Destructive Actions
-              </CardTitle>
+              <CardTitle>Create New User</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {[
-                "Clear All Payment Edit Logs",
-                "Reset Dashboard Cache", 
-                "Delete All Test Data",
-                "Reset System Settings to Default"
-              ].map((action) => (
-                <Dialog key={action}>
-                  <DialogTrigger asChild>
-                    <Button variant="destructive" className="w-full justify-start">
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      {action}
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle className="text-red-600">⚠️ Confirm {action}</DialogTitle>
-                      <DialogDescription>
-                        This action cannot be undone. Type "CONFIRM" to proceed.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4">
-                      <Input
-                        placeholder="Type CONFIRM to proceed"
-                        value={confirmText}
-                        onChange={(e) => setConfirmText(e.target.value)}
-                        className="border-red-300 focus:border-red-500"
-                      />
-                    </div>
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setConfirmText("")}>
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        disabled={!canExecuteDangerousAction}
-                        onClick={() => {
-                          handleDangerousAction(action);
-                          setConfirmText("");
-                        }}
-                      >
-                        Execute
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              ))}
+              <div className="space-y-2">
+                <Label htmlFor="email">Email Address</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={userForm.email}
+                  onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
+                  placeholder="user@example.com"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="full_name">Full Name</Label>
+                <Input
+                  id="full_name"
+                  value={userForm.full_name}
+                  onChange={(e) => setUserForm(prev => ({ ...prev, full_name: e.target.value }))}
+                  placeholder="John Doe"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="role">Role</Label>
+                <Select value={userForm.role} onValueChange={(value) => setUserForm(prev => ({ ...prev, role: value }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="system_admin">System Admin</SelectItem>
+                    <SelectItem value="school_admin">School Admin</SelectItem>
+                    <SelectItem value="director">Director</SelectItem>
+                    <SelectItem value="principal">Principal</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={handleCreateUser} disabled={loading}>
+                  {loading ? "Creating..." : "Create User"}
+                </Button>
+                <Button variant="outline" onClick={() => setShowCreateUser(false)}>
+                  Cancel
+                </Button>
+              </div>
             </CardContent>
           </Card>
-        </TabsContent>
-      </Tabs>
+        </div>
+      )}
 
-      {/* Confirmation Dialog for Financial Actions */}
-      <Dialog open={confirmDialog.open && !confirmDialog.title.includes("DANGEROUS")} onOpenChange={() => setConfirmDialog({ ...confirmDialog, open: false })}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{confirmDialog.title}</DialogTitle>
-            <DialogDescription>{confirmDialog.description}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDialog({ ...confirmDialog, open: false })}>
-              Cancel
-            </Button>
-            <Button onClick={executeAction} disabled={loading}>
-              {loading ? "Executing..." : "Confirm"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Create Role Modal */}
+      {showCreateRole && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>Create New Role</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="role_name">Role Name</Label>
+                <Input
+                  id="role_name"
+                  value={roleForm.role}
+                  onChange={(e) => setRoleForm(prev => ({ ...prev, role: e.target.value }))}
+                  placeholder="custom_role"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="description">Description</Label>
+                <Input
+                  id="description"
+                  value={roleForm.description}
+                  onChange={(e) => setRoleForm(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder="Role description"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={handleCreateRole} disabled={loading}>
+                  {loading ? "Creating..." : "Create Role"}
+                </Button>
+                <Button variant="outline" onClick={() => setShowCreateRole(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

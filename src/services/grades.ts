@@ -1,4 +1,4 @@
-import { supabase } from "@/integrations/supabase/client";
+import { supabase } from "@/lib/supabase";
 import type { Grade } from "@/types";
 
 export const getGrades = async (): Promise<Grade[]> => {

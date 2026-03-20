@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, GraduationCap, Users, CalendarDays,
-  DollarSign, BarChart3, Settings, Shield, UserCheck,
+  DollarSign, BarChart3, Settings, Shield, UserCheck, User,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import schoolLogo from "@/assets/school-logo.png";
@@ -18,6 +18,7 @@ const items = [
   { title: "Terms", url: "/terms", icon: CalendarDays },
   { title: "Fees", url: "/fees", icon: DollarSign },
   { title: "Reports", url: "/reports", icon: BarChart3 },
+  { title: "Profile", url: "/profile", icon: User },
   { title: "Settings", url: "/settings", icon: Shield },
 ];
 

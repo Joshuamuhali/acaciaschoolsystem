@@ -3,7 +3,7 @@
 // Fully UUID-compliant database operations
 // =============================================
 
-import { supabase } from "@/integrations/supabase/client";
+import { supabase } from "@/lib/supabase";
 
 // ===========================
 // TYPE DEFINITIONS

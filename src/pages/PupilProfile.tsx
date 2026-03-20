@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { getPupil, updatePupil } from "@/services/pupils";
-import { getSchoolFees, toggleOtherFee, getOtherFees } from "@/services/fees";
+import { getSchoolFees, getOtherFees, toggleOtherFee, getTransportRoutes, getPupilTransportAssignment, assignTransportToPupil, removeTransportFromPupil } from "@/services/fees";
 import { getTerms } from "@/services/terms";
 import { getGrades } from "@/services/grades";
 import { supabase } from "@/integrations/supabase/client";
@@ -85,25 +85,15 @@ export default function PupilProfile() {
       setFeeAmounts(amounts);
 
       // Load transport routes
-      const { data: routes } = await supabase
-        .from('transport_routes')
-        .select('*')
-        .eq('active', true)
-        .order('region', { ascending: false })
-        .order('route_name');
-
-      setTransportRoutes(routes || []);
+      const routes = await getTransportRoutes();
+      setTransportRoutes(routes);
 
       // Check if pupil has transport assignment
-      const { data: pupilTransport } = await supabase
-        .from('pupil_transport')
-        .select('transport_route_id')
-        .eq('pupil_id', id)
-        .single();
+      const transportAssignment = await getPupilTransportAssignment(id);
 
-      if (pupilTransport) {
+      if (transportAssignment) {
         setIncludeTransport(true);
-        setSelectedTransport(pupilTransport.transport_route_id);
+        setSelectedTransport(transportAssignment.transport_routes.id);
       } else {
         setIncludeTransport(false);
         setSelectedTransport(null);
@@ -153,24 +143,10 @@ export default function PupilProfile() {
       // Update Transport Assignment
       if (includeTransport && selectedTransport) {
         // Assign transport route
-        const { error: upsertError } = await supabase
-          .from('pupil_transport')
-          .upsert({
-            pupil_id: pupil.id,
-            transport_route_id: selectedTransport
-          }, {
-            onConflict: 'pupil_id'
-          });
-
-        if (upsertError) throw upsertError;
+        await assignTransportToPupil(pupil.id, selectedTransport);
       } else {
         // Remove transport assignment
-        const { error: deleteError } = await supabase
-          .from('pupil_transport')
-          .delete()
-          .eq('pupil_id', pupil.id);
-
-        if (deleteError) throw deleteError;
+        await removeTransportFromPupil(pupil.id);
       }
 
       toast({ title: "Success", description: "Pupil and fees updated successfully" });
@@ -295,9 +271,32 @@ export default function PupilProfile() {
                           <Checkbox
                             id={`fee-${fee}`}
                             checked={enabled}
-                            onCheckedChange={(checked) =>
-                              setFeeToggles(prev => ({ ...prev, [fee]: checked as boolean }))
-                            }
+                            onCheckedChange={async (checked) => {
+                              const isChecked = checked as boolean;
+                              
+                              // Immediately call the API for this fee type
+                              try {
+                                await toggleOtherFee(pupil.id, fee, isChecked);
+                                
+                                // Update local state after successful API call
+                                setFeeToggles(prev => ({ ...prev, [fee]: isChecked }));
+                                
+                                toast({
+                                  title: isChecked ? "Fee Enabled" : "Fee Disabled",
+                                  description: `${fee} has been ${isChecked ? 'enabled' : 'disabled'} for this pupil.`,
+                                });
+                                
+                                // Refresh the pupil data to update totals
+                                await loadData();
+                              } catch (error) {
+                                console.error('Error toggling fee:', error);
+                                toast({
+                                  title: "Error",
+                                  description: `Failed to ${isChecked ? 'enable' : 'disable'} ${fee}. Please try again.`,
+                                  variant: "destructive",
+                                });
+                              }
+                            }}
                           />
                           <div className="flex-1">
                             <Label htmlFor={`fee-${fee}`} className="text-sm font-medium cursor-pointer">

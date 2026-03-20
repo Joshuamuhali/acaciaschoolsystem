@@ -7,24 +7,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
-
-interface Grade {
-  id: number;
-  name: string;
-}
-
-interface OtherFeeType {
-  id: number;
-  name: string;
-  amount: number;
-  is_enabled: boolean;
-}
+import { getGrades, getOtherFeeTypes, getPupilsInGrade, updateEnrollmentSchoolFees, upsertPupilOtherFee, type Grade, type OtherFeeType } from "@/services/feeDefaults";
 
 interface GradeFeeDefaults {
   grade_id: number;
   school_fee_amount: number;
-  other_fees: number[]; // Array of other fee type IDs
+  other_fees: number[];
 }
 
 export default function FeeDefaults() {
@@ -43,29 +31,20 @@ export default function FeeDefaults() {
   }, []);
 
   const loadGrades = async () => {
-    const { data, error } = await supabase
-      .from('grades')
-      .select('*')
-      .order('name');
-    
-    if (error) {
+    try {
+      const data = await getGrades();
+      setGrades(data);
+    } catch (error) {
       console.error('Error loading grades:', error);
-    } else {
-      setGrades(data || []);
     }
   };
 
   const loadOtherFeeTypes = async () => {
-    const { data, error } = await supabase
-      .from('other_fee_types')
-      .select('*')
-      .eq('is_enabled', true)
-      .order('name');
-    
-    if (error) {
+    try {
+      const data = await getOtherFeeTypes(true);
+      setOtherFeeTypes(data);
+    } catch (error) {
       console.error('Error loading other fee types:', error);
-    } else {
-      setOtherFeeTypes(data || []);
     }
   };
 
@@ -146,39 +125,25 @@ export default function FeeDefaults() {
 
   const applyDefaultsToPupils = async (gradeId: number, defaults: GradeFeeDefaults) => {
     // Get all pupils in this grade
-    const { data: pupils, error } = await supabase
-      .from('pupils')
-      .select('id, enrollments(id)')
-      .eq('grade_id', gradeId);
-
-    if (error) {
-      console.error('Error getting pupils:', error);
+    const pupils = await getPupilsInGrade(parseInt(defaults.grade_id));
+    
+    if (!pupils) {
+      toast({ title: "Error", description: "Failed to fetch pupils", variant: "destructive" });
       return;
     }
 
-    // For each pupil, ensure enrollment has correct fees
-    for (const pupil of pupils || []) {
+    for (const pupil of pupils) {
       if (pupil.enrollments && pupil.enrollments.length > 0) {
         const enrollmentId = pupil.enrollments[0].id;
         
         // Update enrollment with school fee amount
-        await supabase
-          .from('enrollments')
-          .update({ school_fees_expected: defaults.school_fee_amount })
-          .eq('id', enrollmentId);
+        await updateEnrollmentSchoolFees(enrollmentId, defaults.school_fee_amount);
 
         // Add other fees for this pupil
         for (const feeId of defaults.other_fees) {
           const fee = otherFeeTypes.find(f => f.id === feeId);
           if (fee) {
-            await supabase
-              .from('pupil_other_fees')
-              .upsert({
-                enrollment_id: enrollmentId,
-                fee_type_id: feeId,
-                amount: fee.amount,
-                amount_paid: 0
-              });
+            await upsertPupilOtherFee(enrollmentId, feeId, fee.amount);
           }
         }
       }
