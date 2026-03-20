@@ -23,7 +23,7 @@ export default function Reports() {
       try {
         // Calculate outstanding by grade
         const gradeOutstanding = gradeCounts.map(grade => {
-          const gradeInstallments = installments.filter(inst => inst.grade === grade.name);
+          const gradeInstallments = installments.filter(inst => inst.term === grade.name);
           const totalExpected = gradeInstallments.reduce((sum, inst) => sum + (inst.amount || 0), 0);
           const totalCollected = gradeInstallments.filter(inst => inst.status === 'Paid').reduce((sum, inst) => sum + (inst.amount || 0), 0);
           return {
@@ -57,7 +57,7 @@ export default function Reports() {
 
         // Pupil statements
         const statements = gradeCounts.map(grade => {
-          const gradeInstallments = installments.filter(inst => inst.grade === grade.name);
+          const gradeInstallments = installments.filter(inst => inst.term === grade.name);
           const totalPaid = gradeInstallments.filter(inst => inst.status === 'Paid').reduce((sum, inst) => sum + (inst.amount || 0), 0);
           const totalExpected = gradeInstallments.reduce((sum, inst) => sum + (inst.amount || 0), 0);
           return {
@@ -80,6 +80,52 @@ export default function Reports() {
       }
     }
   }, [stats, gradeCounts, installments]);
+
+  // Export functions
+  const exportOutstandingByGrade = () => {
+    const csv = [
+      ['Grade', 'Outstanding'],
+      ...outByGrade.map(item => [item.name, item.outstanding.toString()])
+    ].map(row => row.join(',')).join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'outstanding-by-grade.csv';
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const exportCollectionByTerm = () => {
+    const csv = [
+      ['Term', 'Collected'],
+      ...collByTerm.map(item => [item.name, item.collected.toString()])
+    ].map(row => row.join(',')).join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'collection-by-term.csv';
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const exportPupilStatements = () => {
+    const csv = [
+      ['Pupil', 'Grade', 'Total Paid', 'Balance'],
+      ...pupilStatements.map(item => [item.full_name, item.grades?.name || '', item.totalPaid.toString(), item.balance.toString()])
+    ].map(row => row.join(',')).join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'pupil-statements.csv';
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
 
   if (loading) {
     return (
@@ -110,11 +156,11 @@ export default function Reports() {
       <div className="grid gap-4 sm:grid-cols-2 mb-6">
         <div className="stat-card">
           <p className="text-sm text-muted-foreground">Total Expected</p>
-          <p className="text-2xl font-bold font-heading text-primary">ZMW {schoolTotals.totalExpected.toLocaleString()}</p>
+          <p className="text-2xl font-bold font-heading text-primary">ZMW {stats.totalExpected.toLocaleString()}</p>
         </div>
         <div className="stat-card">
           <p className="text-sm text-muted-foreground">Total Collected</p>
-          <p className="text-2xl font-bold font-heading text-success">ZMW {schoolTotals.totalCollected.toLocaleString()}</p>
+          <p className="text-2xl font-bold font-heading text-success">ZMW {stats.totalCollected.toLocaleString()}</p>
         </div>
       </div>
 
